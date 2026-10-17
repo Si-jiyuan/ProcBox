@@ -19,7 +19,9 @@ from PySide6.QtWidgets import QMainWindow
 
 from procbox import config
 from procbox.core.models import AppInfo
+from procbox.core.relationships import RelationshipBook
 from procbox.platforms.base import PlatformAdapter
+from procbox.ui.care import CareDirector
 from procbox.ui.chat import ChatDirector
 from procbox.ui.fight import FightDirector
 from procbox.ui.scene import PenScene, PenView
@@ -76,8 +78,27 @@ class MainWindow(QMainWindow):
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(1)
 
-        self._chat = ChatDirector(self._scene, self._sprites, self._rng, self)
-        self._fight = FightDirector(self._scene, self._sprites, self._rng, self)
+        self._relationships = RelationshipBook()
+        self._chat = ChatDirector(
+            self._scene,
+            self._sprites,
+            self._rng,
+            self,
+            relationships=self._relationships,
+        )
+        self._fight = FightDirector(
+            self._scene,
+            self._sprites,
+            self._rng,
+            self,
+            relationships=self._relationships,
+        )
+        self._care = CareDirector(
+            self._scene,
+            self._sprites,
+            self._relationships,
+            self,
+        )
 
         self._clock = QElapsedTimer()
         self._clock.start()
@@ -201,14 +222,16 @@ class MainWindow(QMainWindow):
         dt = min(self._clock.restart() / 1000.0, 0.05)
         width = self._scene.sceneRect().width()
         height = self._scene.sceneRect().height()
+        avoid_zone = self._fight.avoid_zone
         for sprite in self._sprites.values():
-            sprite.advance(dt, width, height)
+            sprite.advance(dt, width, height, avoid_zone)
 
     def closeEvent(self, event) -> None:
         self._move_timer.stop()
         self._scan_timer.stop()
         self._chat.stop()
         self._fight.stop()
+        self._care.stop()
         self._pool.clear()
         self._adapter.shutdown()
         super().closeEvent(event)

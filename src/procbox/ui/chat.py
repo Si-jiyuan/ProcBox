@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
@@ -13,6 +14,8 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsObject, QGraphicsScene
+
+from procbox.core.relationships import RelationshipBook
 
 if TYPE_CHECKING:
     from procbox.ui.sprite import AppSprite
@@ -31,13 +34,14 @@ CHATTER = [
 ]
 
 CONVERSATIONS = [
-    ("嗨～今天怎么样？", "还不错！", "一起摸鱼吗？"),
-    ("你看见主人了吗？", "刚路过～", "嘘，别告诉他"),
-    ("咕噜咕噜…", "你在说什么？", "秘密！"),
-    ("好无聊呀", "那聊聊天吧", "好呀好呀"),
-    ("听说主人在写代码", "又出 bug 了吗？", "哈哈哈哈"),
-    ("你今天也很可爱", "嘿嘿，谢谢！", "💕"),
-    ("要不要休息一下？", "再玩五分钟", "说话算话！"),
+    ("{name} 今天也超可爱！", "谢谢～{name} 也很棒！", "和 {name} 聊天真开心"),
+    ("{name} 的图标好好看", "嘿嘿，{name} 也很有品味", "{name} 最靠谱了"),
+    ("{name} 刚才帮了我大忙", "小事啦，{name} 也很厉害", "以后也要一起玩呀 {name}"),
+    ("{name} 好聪明呀", "{name} 才是真的厉害", "我们是最好的朋友！{name}"),
+    ("{name} 今天真精神", "{name} 也是！", "和 {name} 待在一起真好"),
+    ("我最喜欢 {name} 了", "{name} 也是我的好朋友", "拉钩！{name}"),
+    ("{name} 笑起来真好看", "因为和 {name} 在一起呀", "那以后多聊聊天吧 {name}"),
+    ("{name} 做事真认真", "{name} 才是呢", "一起加油吧 {name}"),
 ]
 
 
@@ -124,11 +128,13 @@ class ChatDirector(QObject):
         sprites: dict[str, AppSprite],
         rng: random.Random,
         parent=None,
+        relationships: RelationshipBook | None = None,
     ) -> None:
         super().__init__(parent)
         self._scene = scene
         self._sprites = sprites
         self._rng = rng
+        self._relationships = relationships or RelationshipBook()
         self._active_pair: tuple[AppSprite, AppSprite] | None = None
         self._token = 0
 
@@ -159,7 +165,15 @@ class ChatDirector(QObject):
             alive = [
                 sprite
                 for sprite in self._sprites.values()
-                if sprite.is_alive and not sprite.is_fighting
+                if sprite.is_alive
+                and not sprite.is_fighting
+                and not sprite.is_spectating
+                and not sprite.is_helping
+                and not sprite.is_fleeing
+                and not sprite.is_chasing
+                and not sprite.is_caring
+                and not sprite.is_knocked_down
+                and not sprite.is_grudging
             ]
             if len(alive) < 2 or self._rng.random() < 0.25:
                 return
@@ -195,9 +209,12 @@ class ChatDirector(QObject):
             self._scene.addItem(HeartBurst(midpoint))
 
             lines = self._rng.choice(CONVERSATIONS)
-            QTimer.singleShot(450, lambda: self._say_step(token, first, lines[0]))
-            QTimer.singleShot(1_550, lambda: self._say_step(token, second, lines[1]))
-            QTimer.singleShot(2_650, lambda: self._say_step(token, first, lines[2]))
+            first_line = lines[0].format(name=second.app.name)
+            second_line = lines[1].format(name=first.app.name)
+            third_line = lines[2].format(name=second.app.name)
+            QTimer.singleShot(450, lambda: self._say_step(token, first, first_line))
+            QTimer.singleShot(1_550, lambda: self._say_step(token, second, second_line))
+            QTimer.singleShot(2_650, lambda: self._say_step(token, first, third_line))
             QTimer.singleShot(4_200, lambda: self._finish_chat(token))
         finally:
             self._chat_timer.start(self._rng.randint(11_000, 20_000))
@@ -213,11 +230,19 @@ class ChatDirector(QObject):
     def _finish_chat(self, token: int) -> None:
         if token != self._token:
             return
-        if self._active_pair is not None:
-            for sprite in self._active_pair:
+        pair = self._active_pair
+        self._active_pair = None
+        if pair is not None:
+            first, second = pair
+            if first.is_alive and second.is_alive:
+                self._relationships.record_chat(
+                    first.app.app_id,
+                    second.app.app_id,
+                    time.monotonic(),
+                )
+            for sprite in pair:
                 if sprite.is_alive:
                     sprite.end_chat()
-            self._active_pair = None
 
     def _random_bubble(self) -> None:
         try:
@@ -227,6 +252,13 @@ class ChatDirector(QObject):
                 if sprite.is_alive
                 and not sprite.is_chatting
                 and not sprite.is_fighting
+                and not sprite.is_spectating
+                and not sprite.is_helping
+                and not sprite.is_fleeing
+                and not sprite.is_chasing
+                and not sprite.is_caring
+                and not sprite.is_knocked_down
+                and not sprite.is_grudging
                 and not sprite.is_saying
             ]
             if candidates:

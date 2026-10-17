@@ -1,23 +1,26 @@
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
     QFont,
     QFontDatabase,
-    QFontMetricsF,
     QPainter,
     QPainterPath,
     QPen,
+    QTextCharFormat,
+    QTextCursor,
+    QTextDocument,
+    QTextOption,
 )
 from PySide6.QtWidgets import QGraphicsObject
-
-from procbox import config
 
 TAIL_HEIGHT = 6.0
 PADDING_X = 9.0
 PADDING_Y = 6.0
-MAX_TEXT_WIDTH = 168.0
+MAX_TEXT_WIDTH = 230.0
 
 
 class SpeechBubble(QGraphicsObject):
@@ -34,10 +37,21 @@ class SpeechBubble(QGraphicsObject):
         self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         self.setAcceptHoverEvents(False)
         self.setZValue(20)
+        if parent is not None:
+            parent.rotationChanged.connect(self._sync_with_parent)
+            self.setRotation(-parent.rotation())
 
         self._font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
         self._font.setPixelSize(12)
         self._font.setWeight(QFont.Weight.DemiBold)
+
+        self._document = QTextDocument(self)
+        self._document.setDocumentMargin(0.0)
+        self._document.setDefaultFont(self._font)
+        text_option = QTextOption()
+        text_option.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        text_option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self._document.setDefaultTextOption(text_option)
 
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
@@ -60,6 +74,9 @@ class SpeechBubble(QGraphicsObject):
         self._text = text
         self._measure()
         self._place()
+        parent = self.parentItem()
+        if parent is not None:
+            self.setRotation(-parent.rotation())
 
         self._hide_timer.stop()
         self._fade.stop()
@@ -124,23 +141,27 @@ class SpeechBubble(QGraphicsObject):
         painter.setBrush(QColor("#FFF9EC"))
         painter.drawPath(shape)
 
-        painter.setFont(self._font)
-        painter.setPen(QColor("#3A2A22"))
-        painter.drawText(
-            body.adjusted(PADDING_X, PADDING_Y, -PADDING_X, -PADDING_Y),
-            int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap),
-            self._text,
-        )
+        painter.save()
+        painter.translate(PADDING_X + 1.0, PADDING_Y + 1.0)
+        self._document.drawContents(painter)
+        painter.restore()
 
     def _measure(self) -> None:
-        metrics = QFontMetricsF(self._font)
-        bounds = metrics.boundingRect(
-            QRectF(0.0, 0.0, MAX_TEXT_WIDTH, 200.0),
-            int(Qt.TextFlag.TextWordWrap),
-            self._text,
-        )
-        self._width = max(52.0, min(MAX_TEXT_WIDTH, bounds.width() + PADDING_X * 2.0 + 2.0))
-        self._height = max(26.0, bounds.height() + PADDING_Y * 2.0 + 2.0)
+        self._document.setPlainText(self._text)
+        cursor = QTextCursor(self._document)
+        cursor.select(QTextCursor.SelectionType.Document)
+        text_format = QTextCharFormat()
+        text_format.setForeground(QColor("#3A2A22"))
+        cursor.mergeCharFormat(text_format)
+
+        self._document.setTextWidth(-1.0)
+        natural_width = self._document.idealWidth()
+        content_width = max(36.0, min(MAX_TEXT_WIDTH, math.ceil(natural_width) + 1.0))
+        self._document.setTextWidth(content_width)
+        content_height = self._document.size().height()
+
+        self._width = content_width + PADDING_X * 2.0 + 2.0
+        self._height = max(26.0, content_height + PADDING_Y * 2.0 + 2.0)
 
     def _place(self) -> None:
         parent = self.parentItem()
@@ -149,10 +170,10 @@ class SpeechBubble(QGraphicsObject):
             return
 
         scene_rect = scene.sceneRect()
-        parent_y = parent.pos().y()
-        space_above = parent_y + config.BODY_Y - scene_rect.top()
-        space_below = scene_rect.bottom() - (parent_y + config.SPRITE_LOGICAL_SIZE)
+        sprite_rect = parent.sceneBoundingRect()
         total_height = self._height + TAIL_HEIGHT
+        space_above = sprite_rect.top() - scene_rect.top()
+        space_below = scene_rect.bottom() - sprite_rect.bottom()
 
         if space_above >= total_height + 8.0 and space_above >= space_below:
             self._above = True
@@ -161,16 +182,27 @@ class SpeechBubble(QGraphicsObject):
         else:
             self._above = space_above >= space_below
 
-        desired_left = parent.pos().x() + config.SPRITE_LOGICAL_SIZE / 2.0 - self._width / 2.0
+        scene_left = sprite_rect.center().x() - self._width / 2.0
         min_left = scene_rect.left() + 6.0
         max_left = scene_rect.right() - self._width - 6.0
-        scene_left = min(max(desired_left, min_left), max_left)
+        scene_left = min(max(scene_left, min_left), max_left)
 
-        y = config.BODY_Y - total_height - 2.0 if self._above else config.SPRITE_LOGICAL_SIZE - 4.0
-        self.setPos(scene_left - parent.pos().x(), y)
+        if self._above:
+            scene_top = sprite_rect.top() - total_height - 4.0
+        else:
+            scene_top = sprite_rect.bottom() + 4.0
+        self.setPos(parent.mapFromScene(QPointF(scene_left, scene_top)))
         self.setTransformOriginPoint(
             QPointF(self._width / 2.0, self._height if self._above else 0.0)
         )
+
+    def _sync_with_parent(self) -> None:
+        parent = self.parentItem()
+        if parent is None:
+            return
+        self.setRotation(-parent.rotation())
+        if self.isVisible():
+            self._place()
 
     def _fade_out(self) -> None:
         self._hiding = True

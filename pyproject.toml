@@ -9,6 +9,7 @@ authors = [{ name = "ProcBox contributors" }]
 dependencies = [
     "PySide6-Essentials>=6.8",
     "psutil>=5.9",
+    "shiboken6>=6.8",
     "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'",
 ]
 

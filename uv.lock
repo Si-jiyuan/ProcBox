@@ -46,6 +46,7 @@ dependencies = [
     { name = "psutil" },
     { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin'" },
     { name = "pyside6-essentials" },
+    { name = "shiboken6" },
 ]
 
 [package.dev-dependencies]
@@ -59,6 +60,7 @@ requires-dist = [
     { name = "psutil", specifier = ">=5.9" },
     { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin'", specifier = ">=10.3" },
     { name = "pyside6-essentials", specifier = ">=6.8" },
+    { name = "shiboken6", specifier = ">=6.8" },
 ]
 
 [package.metadata.requires-dev]
