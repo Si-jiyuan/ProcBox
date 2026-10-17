@@ -20,6 +20,8 @@ from PySide6.QtWidgets import QMainWindow
 from procbox import config
 from procbox.core.models import AppInfo
 from procbox.platforms.base import PlatformAdapter
+from procbox.ui.chat import ChatDirector
+from procbox.ui.fight import FightDirector
 from procbox.ui.scene import PenScene, PenView
 from procbox.ui.sprite import AppSprite
 
@@ -73,6 +75,9 @@ class MainWindow(QMainWindow):
 
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(1)
+
+        self._chat = ChatDirector(self._scene, self._sprites, self._rng, self)
+        self._fight = FightDirector(self._scene, self._sprites, self._rng, self)
 
         self._clock = QElapsedTimer()
         self._clock.start()
@@ -147,16 +152,16 @@ class MainWindow(QMainWindow):
         sprite = AppSprite(app)
         sprite.activated.connect(self._activate_app)
         self._scene.addItem(sprite)
-        x, y = self._spawn_position(sprite.icon_size)
+        x, y = self._spawn_position(sprite.size)
         sprite.place(x, y)
         sprite.pop_in()
         self._sprites[app.app_id] = sprite
         return sprite
 
-    def _spawn_position(self, icon_size: float) -> tuple[float, float]:
+    def _spawn_position(self, sprite_size: float) -> tuple[float, float]:
         rect = self._scene.sceneRect()
-        max_x = max(0.0, rect.width() - icon_size)
-        max_y = max(0.0, rect.height() - icon_size)
+        max_x = max(0.0, rect.width() - sprite_size)
+        max_y = max(0.0, rect.height() - sprite_size)
         best = (self._rng.uniform(0.0, max_x), self._rng.uniform(0.0, max_y))
 
         for _ in range(18):
@@ -169,7 +174,7 @@ class MainWindow(QMainWindow):
                     candidate[0] - sprite.x(),
                     candidate[1] - sprite.y(),
                 )
-                if distance < icon_size * 1.25:
+                if distance < sprite_size * 1.25:
                     clear = False
                     break
             best = candidate
@@ -202,6 +207,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self._move_timer.stop()
         self._scan_timer.stop()
+        self._chat.stop()
+        self._fight.stop()
         self._pool.clear()
         self._adapter.shutdown()
         super().closeEvent(event)
