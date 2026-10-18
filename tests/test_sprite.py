@@ -680,3 +680,8 @@ def test_dragging_a_chat_partner_stops_the_chat(qapp: QApplication) -> None:
 
     first.cancel_drag()
     director.stop()
+
+
+def test_roll_direction_depends_on_horizontal_direction(qapp: QApplication) -> None:
+    assert AppSprite.roll_angular(500.0, 0.0) > 0.0
+    assert AppSprite.roll_angular(-500.0, 0.0) < 0.0

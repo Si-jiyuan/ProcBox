@@ -103,21 +103,22 @@ class ThrowPhysics:
                     width,
                     height,
                 )
+                other_vx = nx * bounce * 0.9 + tangent_x * tangent * 0.2
+                other_vy = ny * bounce * 0.9 + tangent_y * tangent * 0.2
                 other.bump_physics(
-                    nx * bounce * 0.9 + tangent_x * tangent * 0.2,
-                    ny * bounce * 0.9 + tangent_y * tangent * 0.2,
-                    spin=bounce * 0.45,
+                    other_vx,
+                    other_vy,
+                    spin=other.roll_angular(other_vx, other_vy),
                     energy=energy,
                 )
                 other.add_physics_impact()
             else:
                 mover.shift_physics_center(nx * overlap, ny * overlap, width, height)
 
-            mover.set_physics_velocity(
-                -nx * bounce + tangent_x * tangent * 0.6,
-                -ny * bounce + tangent_y * tangent * 0.6,
-            )
-            mover.set_physics_angular(mover.physics_speed * 0.45)
+            mover_vx = -nx * bounce + tangent_x * tangent * 0.6
+            mover_vy = -ny * bounce + tangent_y * tangent * 0.6
+            mover.set_physics_velocity(mover_vx, mover_vy)
+            mover.set_physics_angular(mover.roll_angular(mover_vx, mover_vy))
             mover.add_physics_impact()
 
             # Bounce off at most one object in this substep. Chaining several

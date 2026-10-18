@@ -1031,7 +1031,7 @@ class AppSprite(QGraphicsObject):
             speed = 1_700.0
 
         if speed >= 80.0:
-            self.begin_physics(vx, vy, spin=speed * PHYSICS_ROLL_RATE)
+            self.begin_physics(vx, vy, spin=self.roll_angular(vx, vy))
         else:
             self._expression = Expression.HAPPY
             self._expression_timer = self._rng.uniform(2.0, 4.5)
@@ -1146,6 +1146,15 @@ class AppSprite(QGraphicsObject):
     def set_physics_angular(self, angular: float) -> None:
         self._physics_angular = angular
 
+    @staticmethod
+    def roll_angular(vx: float, vy: float) -> float:
+        """Clockwise for rightward motion, counter-clockwise for leftward."""
+        speed = math.hypot(vx, vy)
+        if speed == 0.0:
+            return 0.0
+        sign = 1.0 if vx >= 0.0 else -1.0
+        return sign * speed * PHYSICS_ROLL_RATE
+
     def integrate_physics(self, dt: float, width: float, height: float) -> None:
         if not self._physics_active:
             return
@@ -1176,7 +1185,7 @@ class AppSprite(QGraphicsObject):
 
         if bounced:
             self._impact_timer = 0.16
-            self._physics_angular = math.hypot(vx, vy) * PHYSICS_ROLL_RATE
+            self._physics_angular = self.roll_angular(vx, vy)
         self._physics_vx = vx
         self._physics_vy = vy
         self._motion = Motion(x, y, vx, vy)
