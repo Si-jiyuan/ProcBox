@@ -271,6 +271,9 @@ class FightDirector(QObject):
             and not sprite.is_fleeing
             and not sprite.is_chasing
             and not sprite.is_caring
+            and not sprite.is_dragging
+            and not sprite.is_physics_active
+            and not sprite.is_recovering
             and not sprite.is_knocked_down
         ]
         current: set[tuple[int, int]] = set()
@@ -415,6 +418,8 @@ class FightDirector(QObject):
                 continue
             if sprite.is_fleeing or sprite.is_chasing or sprite.is_caring:
                 continue
+            if sprite.is_dragging or sprite.is_physics_active or sprite.is_recovering:
+                continue
             if sprite.is_knocked_down:
                 continue
             center = sprite.center_scene
@@ -435,6 +440,12 @@ class FightDirector(QObject):
     def _maybe_join(self) -> None:
         if self._active is None or self._midpoint is None:
             return
+        self._spectators = [
+            sprite for sprite in self._spectators if sprite.is_alive and sprite.is_spectating
+        ]
+        self._notorious_helpers = [
+            sprite for sprite in self._notorious_helpers if sprite.is_alive and sprite.is_spectating
+        ]
         first, second = self._active
         midpoint = self._midpoint
         added = False
@@ -448,7 +459,9 @@ class FightDirector(QObject):
                 continue
             if sprite.is_helping or sprite.is_fleeing or sprite.is_chasing:
                 continue
-            if sprite.is_caring or sprite.is_knocked_down:
+            if sprite.is_caring or sprite.is_dragging or sprite.is_physics_active:
+                continue
+            if sprite.is_recovering or sprite.is_knocked_down:
                 continue
             app_id = sprite.app.app_id
             if app_id in self._join_attempted:
@@ -484,6 +497,9 @@ class FightDirector(QObject):
                 self._notorious_helpers.append(sprite)
 
     def _layout_spectators(self) -> None:
+        self._spectators = [
+            sprite for sprite in self._spectators if sprite.is_alive and sprite.is_spectating
+        ]
         if not self._spectators or self._midpoint is None:
             return
         rect = self._scene.sceneRect()
@@ -508,7 +524,7 @@ class FightDirector(QObject):
 
     def _end_spectators(self) -> None:
         for sprite in self._spectators:
-            if sprite.is_alive:
+            if sprite.is_alive and sprite.is_spectating:
                 sprite.end_watch()
         self._spectators = []
 
@@ -562,7 +578,9 @@ class FightDirector(QObject):
 
         notorious = self._notorious_fighter
         notorious_opponent = self._notorious_opponent
-        helpers = [sprite for sprite in self._notorious_helpers if sprite.is_alive]
+        helpers = [
+            sprite for sprite in self._notorious_helpers if sprite.is_alive and sprite.is_spectating
+        ]
         self._notorious_fighter = None
         self._notorious_opponent = None
         self._notorious_helpers = []
@@ -759,6 +777,9 @@ class FightDirector(QObject):
             and sprite.is_grudging
             and not sprite.is_fighting
             and not sprite.is_chatting
+            and not sprite.is_dragging
+            and not sprite.is_physics_active
+            and not sprite.is_recovering
             and not sprite.is_knocked_down
         ):
             sprite.say(line, 2_600)

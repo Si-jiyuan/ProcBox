@@ -2,18 +2,29 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from enum import Enum
 
 from PySide6.QtCore import (
     QEasingCurve,
     QPointF,
     QPropertyAnimation,
+    QRect,
     QRectF,
     Qt,
     Signal,
 )
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QGraphicsObject
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QFont,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
+from PySide6.QtWidgets import QGraphicsObject, QToolTip
 
 from procbox import config
 from procbox.core.models import AppInfo
@@ -94,6 +105,24 @@ class AppSprite(QGraphicsObject):
         self._down_remaining = 0.0
         self._down_groan_timer = 0.0
 
+        self._hovered = False
+        self._dragging = False
+        self._drag_offset = QPointF()
+        self._drag_start = QPointF()
+        self._drag_history: list[tuple[float, QPointF]] = []
+        self._physics_active = False
+        self._physics_vx = 0.0
+        self._physics_vy = 0.0
+        self._physics_angular = 0.0
+        self._physics_spin = 0.0
+        self._physics_energy = 0.0
+        self._impact_timer = 0.0
+        self._recovering = False
+        self._getting_up = False
+        self._recovery_timer = 0.0
+        self._get_up_timer = 0.0
+        self._landing_position: QPointF | None = None
+
         self._bubble = SpeechBubble(self)
 
         self.setAcceptHoverEvents(True)
@@ -163,6 +192,63 @@ class AppSprite(QGraphicsObject):
         return self._bubble.is_showing
 
     @property
+    def is_dragging(self) -> bool:
+        return self._dragging
+
+    @property
+    def is_physics_active(self) -> bool:
+        return self._physics_active
+
+    @property
+    def is_recovering(self) -> bool:
+        return self._recovering
+
+    @property
+    def landing_position(self) -> QPointF | None:
+        return self._landing_position
+
+    @property
+    def physics_velocity(self) -> tuple[float, float]:
+        return self._physics_vx, self._physics_vy
+
+    @property
+    def physics_speed(self) -> float:
+        return math.hypot(self._physics_vx, self._physics_vy)
+
+    @property
+    def physics_energy(self) -> float:
+        return self._physics_energy
+
+    def set_physics_energy(self, energy: float) -> None:
+        self._physics_energy = max(0.1, min(1.0, energy))
+
+    @property
+    def can_be_bumped(self) -> bool:
+        return self._alive and not (
+            self._knocked_down
+            or self._chatting
+            or self._fighting
+            or self._fleeing
+            or self._chasing
+            or self._caring
+            or self._dragging
+            or self._recovering
+        )
+
+    def can_be_dragged(self) -> bool:
+        return self._alive and not (
+            self._knocked_down
+            or self._chatting
+            or self._fighting
+            or self._spectating
+            or self._helping
+            or self._fleeing
+            or self._chasing
+            or self._caring
+            or self._recovering
+        )
+
+    @property
     def is_grudging(self) -> bool:
         return self._grudge_remaining > 0.0
 
@@ -186,13 +272,15 @@ class AppSprite(QGraphicsObject):
         )
 
     def boundingRect(self) -> QRectF:
+        if self._physics_active or self._recovering:
+            return QRectF(-24.0, -24.0, self._size + 48.0, self._size + 48.0)
         return QRectF(0.0, 0.0, self._size, self._size)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        if not self._alive or self._knocked_down:
+        if not self._alive or self._knocked_down or self._dragging or self._physics_active:
             bob = 0.0
             sway = 0.0
             tilt = 0.0
@@ -231,6 +319,12 @@ class AppSprite(QGraphicsObject):
         painter.rotate(tilt)
         painter.translate(-center)
 
+        if self._impact_timer > 0.0:
+            impact = min(1.0, self._impact_timer / 0.18)
+            painter.translate(center)
+            painter.scale(1.0 + 0.10 * impact, 1.0 - 0.10 * impact)
+            painter.translate(-center)
+
         self._draw_shadow(painter)
         self._draw_limbs(painter)
         pixmap = self._color_pixmap if self._alive else (self._gray_pixmap or self._color_pixmap)
@@ -259,7 +353,38 @@ class AppSprite(QGraphicsObject):
             self._tick_down(dt)
             return
 
+        if self._recovering:
+            self._tick_face(dt)
+            self._impact_timer = max(0.0, self._impact_timer - dt)
+            self.update()
+            if self._getting_up:
+                self._get_up_timer -= dt
+                if self._get_up_timer <= 0.0:
+                    self._getting_up = False
+                    self.prepareGeometryChange()
+                    self._recovering = False
+                    self._recovery_timer = 0.0
+                    self._expression = Expression.HAPPY
+                    self._expression_timer = self._rng.uniform(2.0, 4.5)
+                    self._wake_up()
+                return
+
+            self._recovery_timer -= dt
+            if self._recovery_timer <= 0.0:
+                self._getting_up = True
+                self._get_up_timer = 0.42
+                self._expression = Expression.HAPPY
+                self._expression_timer = 99.0
+                self._play_get_up_animation()
+            return
+
         self._tick_face(dt)
+
+        if self._dragging or self._physics_active:
+            self._impact_timer = max(0.0, self._impact_timer - dt)
+            self._move_phase += dt * (4.0 + self.physics_speed / 25.0)
+            self.update()
+            return
 
         if self._fleeing or self._chasing:
             self._tick_run(dt, width, height)
@@ -271,12 +396,19 @@ class AppSprite(QGraphicsObject):
 
         if self._spectating:
             if self._watch_target is not None:
-                self._tick_gather(dt, width, height)
+                if self._hovered:
+                    self.update()
+                else:
+                    self._tick_gather(dt, width, height)
             else:
                 self.update()
             return
 
         if self._chatting or self._fighting:
+            self.update()
+            return
+
+        if self._hovered:
             self.update()
             return
 
@@ -319,7 +451,12 @@ class AppSprite(QGraphicsObject):
             vy = -vy
         self._motion = Motion(x, y, vx, vy)
         self.setPos(x, y)
-        self.setZValue(y + self._size)
+        if self._physics_active:
+            self.setZValue(1_000_000.0 + y + self._size)
+        elif self._dragging:
+            self.setZValue(2_000_000.0)
+        else:
+            self.setZValue(y + self._size)
 
     def update_app(self, app: AppInfo) -> None:
         self._app = app
@@ -344,6 +481,7 @@ class AppSprite(QGraphicsObject):
     def begin_chat(self) -> None:
         if not self._alive or self._knocked_down:
             return
+        self._clear_pointer_state()
         self._fighting = False
         self._spectating = False
         self._helping = False
@@ -373,6 +511,7 @@ class AppSprite(QGraphicsObject):
     def begin_fight(self, opponent: QPointF) -> None:
         if not self._alive or self._knocked_down:
             return
+        self._clear_pointer_state()
         self._fighting = True
         self._chatting = False
         self._spectating = False
@@ -437,6 +576,14 @@ class AppSprite(QGraphicsObject):
         self._fall_anim.setEasingCurve(QEasingCurve.Type.OutBounce)
         self._fall_anim.start()
 
+    def _play_get_up_animation(self) -> None:
+        self._fall_anim.stop()
+        self._fall_anim.setDuration(420)
+        self._fall_anim.setStartValue(self.rotation())
+        self._fall_anim.setEndValue(0.0)
+        self._fall_anim.setEasingCurve(QEasingCurve.Type.OutBack)
+        self._fall_anim.start()
+
     def get_up(self) -> None:
         if not self._knocked_down:
             return
@@ -450,18 +597,13 @@ class AppSprite(QGraphicsObject):
             self._expression = Expression.HAPPY
             self._expression_timer = self._rng.uniform(2.0, 4.5)
         self.update()
-
-        self._fall_anim.stop()
-        self._fall_anim.setDuration(420)
-        self._fall_anim.setStartValue(self.rotation())
-        self._fall_anim.setEndValue(0.0)
-        self._fall_anim.setEasingCurve(QEasingCurve.Type.OutBack)
-        self._fall_anim.start()
+        self._play_get_up_animation()
         self._wake_up()
 
     def begin_watch(self, focus: QPointF) -> None:
         if not self._alive or self._knocked_down:
             return
+        self._clear_pointer_state()
         self._spectating = True
         self._helping = False
         self._chatting = False
@@ -480,6 +622,7 @@ class AppSprite(QGraphicsObject):
     def begin_help(self, focus: QPointF) -> None:
         if not self._alive or self._knocked_down:
             return
+        self._clear_pointer_state()
         self._spectating = True
         self._helping = True
         self._chatting = False
@@ -520,6 +663,7 @@ class AppSprite(QGraphicsObject):
     def begin_care(self, focus: QPointF) -> None:
         if not self._alive or self._knocked_down:
             return
+        self._clear_pointer_state()
         self._caring = True
         self._chatting = False
         self._fighting = False
@@ -547,6 +691,7 @@ class AppSprite(QGraphicsObject):
     def start_flee(self, away_from: QPointF, direction: QPointF | None = None) -> None:
         if not self._alive or self._knocked_down:
             return
+        self._clear_pointer_state()
         self._fleeing = True
         self._chasing = False
         self._chase_target = None
@@ -584,6 +729,7 @@ class AppSprite(QGraphicsObject):
     def start_chase(self, target: AppSprite, delay: float = 0.0) -> None:
         if not self._alive or self._knocked_down:
             return
+        self._clear_pointer_state()
         self._chasing = True
         self._fleeing = False
         self._chase_target = target
@@ -686,6 +832,7 @@ class AppSprite(QGraphicsObject):
         if self._alive:
             return
         self._alive = True
+        self._clear_pointer_state()
         self._spectating = False
         self._helping = False
         self._fleeing = False
@@ -728,26 +875,353 @@ class AppSprite(QGraphicsObject):
 
         self.pop_in()
 
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.begin_drag(event.scenePos())
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._dragging:
+            self.drag_to(event.scenePos())
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._dragging:
+            self.release_drag(event.scenePos())
+        event.accept()
+
     def mouseDoubleClickEvent(self, event) -> None:
+        if self._dragging:
+            self.cancel_drag()
         if self._alive:
             self.activated.emit(self._app.app_id)
         event.accept()
 
     def hoverEnterEvent(self, event) -> None:
-        if self._alive:
+        if self._alive and not self._dragging:
+            self._hovered = True
             self.setToolTip(self._tooltip())
-            if not self._knocked_down:
+            scene = self.scene()
+            view = scene.views()[0] if scene is not None and scene.views() else None
+            QToolTip.showText(
+                QCursor.pos(),
+                self._tooltip(),
+                view,
+                QRect(),
+                10_000,
+            )
+            if not self._knocked_down and not self._physics_active:
                 self._animate_scale(1.08, 130)
         event.accept()
 
     def hoverLeaveEvent(self, event) -> None:
-        self._animate_scale(1.0, 160)
+        self._hovered = False
+        QToolTip.hideText()
+        if not self._dragging:
+            self._animate_scale(1.0, 160)
         event.accept()
+
+    def begin_drag(self, scene_pos: QPointF) -> bool:
+        if self._dragging or not self.can_be_dragged():
+            return False
+        if self._physics_active or self._recovering:
+            self.prepareGeometryChange()
+        self._physics_active = False
+        self._physics_vx = 0.0
+        self._physics_vy = 0.0
+        self._physics_angular = 0.0
+        self._physics_spin = 0.0
+        self._impact_timer = 0.0
+        self.setRotation(0.0)
+        self._dragging = True
+        self._hovered = False
+        self._drag_offset = scene_pos - self.pos()
+        self._drag_start = QPointF(scene_pos)
+        self._drag_history = [(time.monotonic(), QPointF(scene_pos))]
+        self._rest_remaining = 0.0
+        self._expression = Expression.SURPRISED
+        self._expression_timer = 99.0
+        self._bubble.hide_now()
+        self._scale_anim.stop()
+        self.setScale(1.08)
+        self.setZValue(2_000_000.0)
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        QToolTip.hideText()
+        self.update()
+        return True
+
+    def drag_to(self, scene_pos: QPointF) -> None:
+        if not self._dragging:
+            return
+        scene = self.scene()
+        if scene is None:
+            return
+        rect = scene.sceneRect()
+        max_x = max(0.0, rect.width() - self._size)
+        max_y = max(0.0, rect.height() - self._size)
+        x = min(max(scene_pos.x() - self._drag_offset.x(), 0.0), max_x)
+        y = min(max(scene_pos.y() - self._drag_offset.y(), 0.0), max_y)
+        self.setPos(x, y)
+        self.setZValue(2_000_000.0)
+        self._motion = Motion(x, y, 0.0, 0.0)
+
+        now = time.monotonic()
+        self._drag_history.append((now, QPointF(scene_pos)))
+        self._drag_history = [sample for sample in self._drag_history if now - sample[0] <= 0.12]
+        self.update()
+
+    def release_drag(self, scene_pos: QPointF) -> None:
+        if not self._dragging:
+            return
+        self._dragging = False
+        self.setScale(1.0)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._hovered = False
+        QToolTip.hideText()
+
+        now = time.monotonic()
+        self._drag_history.append((now, QPointF(scene_pos)))
+        self._drag_history = [sample for sample in self._drag_history if now - sample[0] <= 0.12]
+        vx = 0.0
+        vy = 0.0
+        if len(self._drag_history) >= 2:
+            start_time, start_pos = self._drag_history[0]
+            end_time, end_pos = self._drag_history[-1]
+            elapsed = end_time - start_time
+            if elapsed > 0.008:
+                vx = (end_pos.x() - start_pos.x()) / elapsed
+                vy = (end_pos.y() - start_pos.y()) / elapsed
+        speed = math.hypot(vx, vy)
+        if speed > 1_700.0:
+            scale = 1_700.0 / speed
+            vx *= scale
+            vy *= scale
+            speed = 1_700.0
+
+        if speed >= 80.0:
+            self.begin_physics(vx, vy, spin=-vx * 0.18 + vy * 0.08)
+        else:
+            self._expression = Expression.HAPPY
+            self._expression_timer = self._rng.uniform(2.0, 4.5)
+            self._wake_up()
+
+    def _clear_pointer_state(self) -> None:
+        if self._physics_active or self._recovering:
+            self.prepareGeometryChange()
+        self._dragging = False
+        self._physics_active = False
+        self._physics_vx = 0.0
+        self._physics_vy = 0.0
+        self._physics_angular = 0.0
+        self._physics_spin = 0.0
+        self._physics_energy = 0.0
+        self._impact_timer = 0.0
+        self._hovered = False
+        self._recovering = False
+        self._getting_up = False
+        self._recovery_timer = 0.0
+        self._get_up_timer = 0.0
+        self._landing_position = None
+        self._fall_anim.stop()
+        self.setRotation(0.0)
+        self._scale_anim.stop()
+        self.setScale(1.0)
+
+    def cancel_drag(self) -> None:
+        if not self._dragging:
+            return
+        self._dragging = False
+        self.setScale(1.0)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._hovered = False
+        QToolTip.hideText()
+        self._expression = Expression.HAPPY
+        self._expression_timer = self._rng.uniform(2.0, 4.5)
+        self._wake_up()
+
+    def begin_physics(
+        self,
+        vx: float,
+        vy: float,
+        spin: float = 0.0,
+        energy: float = 1.0,
+    ) -> None:
+        if not self._alive:
+            return
+        if not (self._physics_active or self._recovering):
+            self.prepareGeometryChange()
+        self._fall_anim.stop()
+        self._physics_active = True
+        self._dragging = False
+        self._spectating = False
+        self._helping = False
+        self._watch_target = None
+        self._watch_focus = None
+        self._recovering = False
+        self._getting_up = False
+        self._recovery_timer = 0.0
+        self._get_up_timer = 0.0
+        self._landing_position = None
+        self.set_physics_velocity(vx, vy)
+        self.set_physics_energy(energy)
+        self._physics_angular = spin
+        self._physics_spin = 0.0
+        self.setRotation(0.0)
+        self._impact_timer = 0.16
+        self._rest_remaining = 0.0
+        self._expression = Expression.SCREAM
+        self._expression_timer = 99.0
+        self._bubble.hide_now()
+        self.setScale(1.0)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setZValue(1_000_000.0 + self.pos().y() + self._size)
+        self.update()
+
+    def bump_physics(
+        self,
+        vx: float,
+        vy: float,
+        spin: float = 0.0,
+        energy: float = 0.5,
+    ) -> None:
+        if not self.can_be_bumped:
+            return
+        if not self._physics_active:
+            self.begin_physics(vx, vy, spin, energy=energy)
+            return
+        self.set_physics_velocity(vx, vy)
+        self.set_physics_energy(energy)
+        self._physics_angular = spin
+        self._impact_timer = 0.16
+        self._expression = Expression.SCREAM
+        self._expression_timer = 99.0
+        self.setZValue(1_000_000.0 + self.pos().y() + self._size)
+        self.update()
+
+    def set_physics_velocity(self, vx: float, vy: float) -> None:
+        speed = math.hypot(vx, vy)
+        if speed > 1_800.0:
+            factor = 1_800.0 / speed
+            vx *= factor
+            vy *= factor
+        self._physics_vx = vx
+        self._physics_vy = vy
+
+    def scale_physics_velocity(self, factor: float) -> None:
+        self._physics_vx *= factor
+        self._physics_vy *= factor
+
+    def integrate_physics(self, dt: float, width: float, height: float) -> None:
+        if not self._physics_active:
+            return
+        vx = self._physics_vx
+        vy = self._physics_vy
+        x = self.pos().x() + vx * dt
+        y = self.pos().y() + vy * dt
+        max_x = max(0.0, width - self._size)
+        max_y = max(0.0, height - self._size)
+        bounced = False
+
+        if x < 0.0:
+            x = 0.0
+            vx = abs(vx) * 0.72
+            bounced = True
+        elif x > max_x:
+            x = max_x
+            vx = -abs(vx) * 0.72
+            bounced = True
+        if y < 0.0:
+            y = 0.0
+            vy = abs(vy) * 0.72
+            bounced = True
+        elif y > max_y:
+            y = max_y
+            vy = -abs(vy) * 0.72
+            bounced = True
+
+        if bounced:
+            self._impact_timer = 0.16
+        self._physics_vx = vx
+        self._physics_vy = vy
+        self._motion = Motion(x, y, vx, vy)
+        self.setPos(x, y)
+        self.setZValue(1_000_000.0 + y + self._size)
+        self._physics_spin = (self._physics_spin + self._physics_angular * dt) % 360.0
+        self.setRotation(self._physics_spin)
+        self._move_phase += dt * (3.5 + math.hypot(vx, vy) / 22.0)
+
+    def apply_physics_friction(self, dt: float) -> None:
+        if not self._physics_active:
+            return
+        speed = self.physics_speed
+        damping = math.exp(-(1.7 if speed > 160.0 else 3.0) * dt)
+        self._physics_vx *= damping
+        self._physics_vy *= damping
+        self._physics_angular *= math.exp(-2.0 * dt)
+        if math.hypot(self._physics_vx, self._physics_vy) < 55.0:
+            self.stop_physics()
+
+    def shift_physics_center(
+        self,
+        dx: float,
+        dy: float,
+        width: float,
+        height: float,
+    ) -> None:
+        max_x = max(0.0, width - self._size)
+        max_y = max(0.0, height - self._size)
+        x = min(max(self.pos().x() + dx, 0.0), max_x)
+        y = min(max(self.pos().y() + dy, 0.0), max_y)
+        self._motion = Motion(x, y, self._physics_vx, self._physics_vy)
+        self.setPos(x, y)
+        self.setZValue(1_000_000.0 + y + self._size)
+
+    def add_physics_impact(self) -> None:
+        self._impact_timer = 0.18
+
+    def stop_physics(self) -> None:
+        if not self._physics_active:
+            return
+        self._physics_active = False
+        self._physics_vx = 0.0
+        self._physics_vy = 0.0
+        self._physics_angular = 0.0
+        self._physics_spin = 0.0
+        self._physics_energy = 0.0
+        self._impact_timer = 0.0
+        self.setScale(1.0)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        if not self._alive:
+            self.setRotation(0.0)
+            return
+
+        self._landing_position = QPointF(self.pos())
+        self._motion = Motion(self.pos().x(), self.pos().y(), 0.0, 0.0)
+        self._recovering = True
+        self._getting_up = False
+        self._recovery_timer = self._rng.uniform(0.45, 0.9)
+        self._get_up_timer = 0.0
+        self._expression = Expression.SURPRISED
+        self._expression_timer = 99.0
+        self.setZValue(self.pos().y() + self._size)
+
+        self._lying_pose = self._rng.choice([LyingPose.PRONE, LyingPose.SUPINE])
+        if self._lying_pose is LyingPose.PRONE:
+            target = self._rng.choice((-1.0, 1.0)) * self._rng.uniform(80.0, 94.0)
+        else:
+            target = 90.0 + self._rng.uniform(-8.0, 8.0)
+        self._fall_anim.stop()
+        self._fall_anim.setDuration(260)
+        self._fall_anim.setStartValue(self.rotation())
+        self._fall_anim.setEndValue(target)
+        self._fall_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fall_anim.start()
+        self.update()
 
     def _face_key(self) -> tuple:
         return (
             self._expression,
-            self._blink_remaining > 0.0 or self._knocked_down,
+            self._blink_remaining > 0.0 or self._knocked_down or self._physics_active,
             round(self._look_x * 5.0) / 5.0,
             round(self._look_y * 5.0) / 5.0,
         )
@@ -764,7 +1238,7 @@ class AppSprite(QGraphicsObject):
                 cache_painter,
                 QRectF(0.0, 0.0, config.BODY_SIZE, config.BODY_SIZE),
                 self._expression,
-                self._blink_remaining > 0.0 or self._knocked_down,
+                self._blink_remaining > 0.0 or self._knocked_down or self._physics_active,
                 self._look_x,
                 self._look_y,
             )
@@ -790,13 +1264,24 @@ class AppSprite(QGraphicsObject):
                 self._blink_remaining = 0.12
                 self._blink_timer = self._rng.uniform(2.2, 6.0)
 
-        if self._fighting or self._helping or self._fleeing or self._chasing:
+        if self._physics_active:
+            self._expression = Expression.SCREAM
+            self._expression_timer = 99.0
+        elif self._recovering:
+            self._expression = Expression.SLEEPY
+            self._expression_timer = 99.0
+        elif self._fighting or self._helping or self._fleeing or self._chasing:
             self._expression = Expression.ANGRY
             self._expression_timer = 99.0
         elif self._grudge_remaining > 0.0:
             self._grudge_remaining = max(0.0, self._grudge_remaining - dt)
             if self._grudge_remaining > 0.0:
-                if not self._chatting and not self._spectating and not self._caring:
+                if (
+                    not self._chatting
+                    and not self._spectating
+                    and not self._caring
+                    and not self._recovering
+                ):
                     self._expression = Expression.ANGRY
                     self._expression_timer = self._grudge_remaining
             else:
@@ -939,7 +1424,7 @@ class AppSprite(QGraphicsObject):
 
     def _wake_up(self) -> None:
         vx, vy = random_velocity(self._rng)
-        self._motion = Motion(self._motion.x, self._motion.y, vx, vy)
+        self._motion = Motion(self.pos().x(), self.pos().y(), vx, vy)
         if abs(vx) > 1.0:
             self._facing = 1.0 if vx > 0.0 else -1.0
         self._rest_remaining = 0.0
@@ -997,12 +1482,90 @@ class AppSprite(QGraphicsObject):
         self._look_target_x = ux
         self._look_target_y = uy
 
+    def _draw_dragging_limbs(self, painter: QPainter) -> None:
+        limb_color = LIMB_BLACK
+        outline_color = LIMB_OUTLINE
+        cx = BODY.center().x()
+
+        for side in (-1, 1):
+            phase = self._anim_time * 3.5 + side * 0.8
+            hip = QPointF(cx + side * 9.5, BODY.bottom() - 6.0)
+            ankle = QPointF(
+                cx + side * 10.0 + math.sin(phase) * 6.0,
+                82.0 + math.cos(phase) * 1.5,
+            )
+            toe = QPointF(ankle.x() + side * 6.0, ankle.y())
+            leg = QPainterPath(hip)
+            leg.lineTo(ankle)
+            leg.lineTo(toe)
+            self._stroke_path(painter, leg, outline_color, 7.0)
+            self._stroke_path(painter, leg, limb_color, 4.4)
+
+        for side in (-1, 1):
+            phase = self._anim_time * 4.2 + side * 1.1
+            shoulder = QPointF(cx + side * 20.0, BODY.top() + 36.0)
+            hand = QPointF(
+                cx + side * 24.0 + math.sin(phase) * 7.0,
+                76.0 + math.cos(phase) * 2.0,
+            )
+            control = QPointF(cx + side * 22.0, 58.0)
+            arm = QPainterPath(shoulder)
+            arm.quadTo(control, hand)
+            self._stroke_path(painter, arm, outline_color, 6.4)
+            self._stroke_path(painter, arm, limb_color, 4.0)
+            painter.setPen(QPen(outline_color, 1.5))
+            painter.setBrush(limb_color)
+            painter.drawEllipse(hand, 3.6, 3.6)
+
+    def _draw_ragdoll_limbs(self, painter: QPainter) -> None:
+        limb_color = LIMB_BLACK
+        outline_color = LIMB_OUTLINE
+        cx = BODY.center().x()
+
+        intensity = min(1.0, max(0.12, self.physics_speed / 450.0))
+        for side in (-1, 1):
+            wobble = math.sin(self._anim_time * 10.0 + side * 1.7) * 7.0 * intensity
+            hip = QPointF(cx + side * 9.5, BODY.bottom() - 6.0)
+            ankle = QPointF(
+                cx + side * 19.0 + wobble * 0.5,
+                78.0 + wobble * 0.4,
+            )
+            toe = QPointF(ankle.x() + side * 8.0, ankle.y())
+            leg = QPainterPath(hip)
+            leg.lineTo(ankle)
+            leg.lineTo(toe)
+            self._stroke_path(painter, leg, outline_color, 7.0)
+            self._stroke_path(painter, leg, limb_color, 4.4)
+
+        for side in (-1, 1):
+            wobble = math.sin(self._anim_time * 9.0 + side) * 8.0 * intensity
+            shoulder = QPointF(cx + side * 20.0, BODY.top() + 36.0)
+            hand = QPointF(
+                cx + side * 36.0,
+                BODY.top() + 22.0 + wobble,
+            )
+            control = QPointF(cx + side * 30.0, BODY.top() + 26.0)
+            arm = QPainterPath(shoulder)
+            arm.quadTo(control, hand)
+            self._stroke_path(painter, arm, outline_color, 6.4)
+            self._stroke_path(painter, arm, limb_color, 4.0)
+            painter.setPen(QPen(outline_color, 1.5))
+            painter.setBrush(limb_color)
+            painter.drawEllipse(hand, 3.6, 3.6)
+
     def _draw_limbs(self, painter: QPainter) -> None:
+        if self._dragging:
+            self._draw_dragging_limbs(painter)
+            return
+        if self._physics_active:
+            self._draw_ragdoll_limbs(painter)
+            return
+
         dead = not self._alive
         limb_color = DEAD_LIMB if dead else LIMB_BLACK
         outline_color = DEAD_OUTLINE if dead else LIMB_OUTLINE
         cx = BODY.center().x()
-        static = dead or self._knocked_down
+        static = dead or self._knocked_down or self._recovering
         pivot = QPointF(self._size / 2.0, self._size / 2.0)
         theta = math.radians(self.rotation()) if static else 0.0
 

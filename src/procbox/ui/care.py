@@ -82,15 +82,15 @@ class CareDirector(QObject):
                 continue
             if friend.is_helping or friend.is_fleeing or friend.is_chasing:
                 continue
-            if friend.is_caring or friend.is_knocked_down:
+            if friend.is_caring or friend.is_dragging or friend.is_physics_active:
                 continue
-            if (
-                self._relationships.bond(
-                    downed.app.app_id,
-                    friend.app.app_id,
-                ).chats
-                <= 0
-            ):
+            if friend.is_recovering or friend.is_knocked_down:
+                continue
+            bond = self._relationships.get_bond(
+                downed.app.app_id,
+                friend.app.app_id,
+            )
+            if bond is None or bond.chats <= 0:
                 continue
             distance = math.hypot(
                 friend.center_scene.x() - downed.center_scene.x(),

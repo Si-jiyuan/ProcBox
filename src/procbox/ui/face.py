@@ -12,6 +12,7 @@ class Expression(Enum):
     SURPRISED = "surprised"
     SLEEPY = "sleepy"
     ANGRY = "angry"
+    SCREAM = "scream"
     DEAD = "dead"
 
 
@@ -178,7 +179,7 @@ def draw_face(
         painter.restore()
         return
 
-    if blinking or expression is Expression.HAPPY:
+    if blinking or expression in (Expression.HAPPY, Expression.SCREAM):
         _draw_closed_eye(painter, eyes[0], ink)
         _draw_closed_eye(painter, eyes[1], ink)
     elif expression is Expression.SURPRISED:
@@ -221,6 +222,15 @@ def draw_face(
         font.setBold(True)
         painter.setFont(font)
         painter.drawText(QRectF(cx + 10, eye_y - 8, 12, 10), Qt.AlignmentFlag.AlignCenter, "z")
+    elif expression is Expression.SCREAM:
+        painter.setPen(QPen(ink, 1.1))
+        painter.setBrush(ink)
+        painter.drawEllipse(QPointF(mouth.x(), mouth.y() + 1.0), 4.8, 6.2)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(PAPER)
+        painter.drawEllipse(QPointF(mouth.x() - 1.2, mouth.y() - 1.4), 1.0, 1.2)
+        painter.setBrush(TONGUE)
+        painter.drawEllipse(QPointF(mouth.x(), mouth.y() + 4.0), 2.4, 1.3)
     elif expression is Expression.HAPPY:
         _draw_open_mouth(painter, mouth, ink)
     else:

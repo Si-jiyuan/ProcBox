@@ -170,6 +170,9 @@ class ChatDirector(QObject):
                 and not sprite.is_fleeing
                 and not sprite.is_chasing
                 and not sprite.is_caring
+                and not sprite.is_dragging
+                and not sprite.is_physics_active
+                and not sprite.is_recovering
                 and not sprite.is_knocked_down
                 and not sprite.is_grudging
             ]
@@ -255,6 +258,9 @@ class ChatDirector(QObject):
                 and not sprite.is_fleeing
                 and not sprite.is_chasing
                 and not sprite.is_caring
+                and not sprite.is_dragging
+                and not sprite.is_physics_active
+                and not sprite.is_recovering
                 and not sprite.is_knocked_down
                 and not sprite.is_grudging
                 and not sprite.is_saying

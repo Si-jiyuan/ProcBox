@@ -16,7 +16,7 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QGuiApplication, QPalette
 from PySide6.QtWidgets import QMainWindow
 
 from procbox import config
@@ -26,6 +26,7 @@ from procbox.platforms.base import PlatformAdapter
 from procbox.ui.care import CareDirector
 from procbox.ui.chat import ChatDirector
 from procbox.ui.fight import FightDirector
+from procbox.ui.physics import ThrowPhysics
 from procbox.ui.scene import PenScene, PenView
 from procbox.ui.sprite import AppSprite
 
@@ -66,6 +67,9 @@ class MainWindow(QMainWindow):
         self._first_scan_done = False
         self._last_occlusion_check = 0.0
         self._window_occluded = False
+        self._occlusion_supported = (
+            sys.platform == "darwin" and QGuiApplication.platformName() == "cocoa"
+        )
 
         self.setWindowTitle("ProcBox")
         self.resize(config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
@@ -106,6 +110,7 @@ class MainWindow(QMainWindow):
             self._relationships,
             self,
         )
+        self._physics = ThrowPhysics(self._sprites, self._rng)
 
         self._clock = QElapsedTimer()
         self._clock.start()
@@ -231,7 +236,7 @@ class MainWindow(QMainWindow):
             return
 
         now = time.monotonic()
-        if now - self._last_occlusion_check >= 0.25:
+        if self._occlusion_supported and now - self._last_occlusion_check >= 0.25:
             self._last_occlusion_check = now
             self._window_occluded = self._adapter.is_window_occluded(int(self.winId()))
 
@@ -250,6 +255,7 @@ class MainWindow(QMainWindow):
         avoid_zone = self._fight.avoid_zone
         for sprite in self._sprites.values():
             sprite.advance(dt, width, height, avoid_zone)
+        self._physics.step(dt, width, height)
 
     def closeEvent(self, event) -> None:
         self._move_timer.stop()

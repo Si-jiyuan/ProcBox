@@ -17,6 +17,7 @@ from procbox.ui.care import CareDirector
 from procbox.ui.chat import CONVERSATIONS
 from procbox.ui.face import Expression
 from procbox.ui.fight import BAD_LINES, SPECTATOR_LINES, FightCloud, FightDirector
+from procbox.ui.physics import ThrowPhysics
 from procbox.ui.sprite import AppSprite
 
 
@@ -432,3 +433,160 @@ def test_tooltip_contains_memory_and_cpu(qapp: QApplication) -> None:
 
     assert "128.0 MB" in text
     assert "3.5%" in text
+
+
+def test_drag_and_throw_sets_physics(qapp: QApplication) -> None:
+    scene = QGraphicsScene()
+    scene.setSceneRect(0.0, 0.0, 800.0, 600.0)
+    sprite = make_sprite(random.Random(70))
+    scene.addItem(sprite)
+    sprite.place(100.0, 100.0)
+
+    assert sprite.begin_drag(QPointF(110.0, 110.0))
+    time.sleep(0.02)
+    sprite.drag_to(QPointF(140.0, 130.0))
+    time.sleep(0.02)
+    sprite.drag_to(QPointF(180.0, 160.0))
+    sprite.release_drag(QPointF(230.0, 200.0))
+
+    assert sprite.is_physics_active
+    assert sprite.physics_speed > 0.0
+
+
+def test_thrown_sprite_bumps_a_neighbour(qapp: QApplication) -> None:
+    scene = QGraphicsScene()
+    scene.setSceneRect(0.0, 0.0, 800.0, 600.0)
+    first = make_sprite(random.Random(71), "/Applications/First.app", "First")
+    second = make_sprite(random.Random(72), "/Applications/Second.app", "Second")
+    scene.addItem(first)
+    scene.addItem(second)
+    first.move_center_to(QPointF(100.0, 300.0))
+    second.move_center_to(QPointF(180.0, 300.0))
+
+    first.begin_physics(900.0, 0.0)
+    physics = ThrowPhysics({"first": first, "second": second}, random.Random(3))
+    for _ in range(12):
+        physics.step(1.0 / 30.0, 800.0, 600.0)
+
+    assert second.is_physics_active
+    assert first.x() != 100.0
+    assert first.physics_speed >= 0.0
+
+
+def test_hover_pauses_wandering(qapp: QApplication) -> None:
+    sprite = make_sprite(random.Random(80))
+    sprite.place(200.0, 200.0)
+    start = (sprite.x(), sprite.y())
+    sprite._hovered = True
+
+    sprite.advance(0.1, 800.0, 600.0)
+
+    assert (sprite.x(), sprite.y()) == start
+
+
+def test_thrown_sprite_recovers_at_landing_position(qapp: QApplication) -> None:
+    sprite = make_sprite(random.Random(90))
+    sprite.place(420.0, 260.0)
+    landing = (sprite.x(), sprite.y())
+
+    sprite.begin_physics(0.0, 0.0)
+    sprite.stop_physics()
+
+    assert sprite.is_recovering
+    assert sprite.landing_position is not None
+    assert (sprite.landing_position.x(), sprite.landing_position.y()) == landing
+
+    for _ in range(80):
+        sprite.advance(0.02, 800.0, 600.0)
+        if not sprite.is_recovering:
+            break
+
+    assert not sprite.is_recovering
+    assert (sprite.x(), sprite.y()) == landing
+
+
+def test_physics_uses_scream_and_spin(qapp: QApplication) -> None:
+    sprite = make_sprite(random.Random(90))
+    sprite.place(300.0, 300.0)
+    sprite.begin_physics(600.0, 0.0, spin=-180.0)
+    sprite.advance(0.1, 800.0, 600.0)
+    sprite.integrate_physics(0.1, 800.0, 600.0)
+
+    assert sprite.expression is Expression.SCREAM
+    assert sprite.rotation() != 0.0
+
+
+def test_physics_recovery_starts_at_the_landing_spot(qapp: QApplication) -> None:
+    sprite = make_sprite(random.Random(91))
+    sprite.place(300.0, 300.0)
+    sprite.begin_physics(100.0, 0.0, spin=-180.0)
+    sprite.stop_physics()
+
+    assert sprite.is_recovering
+    landing = sprite.landing_position
+    assert landing is not None
+    assert landing == sprite.pos()
+
+    sprite.advance(1.0, 800.0, 600.0)
+    sprite.advance(0.5, 800.0, 600.0)
+
+    assert not sprite.is_recovering
+    assert not sprite.is_physics_active
+    assert sprite.pos() == landing
+
+
+def test_recovered_app_keeps_the_landing_position(qapp: QApplication) -> None:
+    sprite = make_sprite(random.Random(92))
+    sprite.place(100.0, 100.0)
+    sprite.begin_physics(0.0, 0.0)
+    sprite.setPos(300.0, 300.0)
+    sprite.stop_physics()
+
+    landing = sprite.landing_position
+    assert landing is not None
+
+    sprite.advance(1.0, 800.0, 600.0)
+    sprite.advance(0.5, 800.0, 600.0)
+    assert not sprite.is_recovering
+
+    sprite.advance(0.1, 800.0, 600.0)
+    assert abs(sprite.x() - landing.x()) < 20.0
+    assert abs(sprite.y() - landing.y()) < 20.0
+
+
+def test_spectator_can_be_bumped_by_a_thrown_app(qapp: QApplication) -> None:
+    sprite = make_sprite(random.Random(93))
+    sprite.begin_watch(QPointF(300.0, 300.0))
+    assert sprite.is_spectating
+    assert sprite.can_be_bumped
+
+    sprite.bump_physics(200.0, 0.0)
+
+    assert sprite.is_physics_active
+    assert not sprite.is_spectating
+    assert not sprite.is_helping
+
+
+def test_crowded_collision_cluster_settles(qapp: QApplication) -> None:
+    cluster = [make_sprite(random.Random(100 + index)) for index in range(4)]
+    positions = [
+        QPointF(300.0, 300.0),
+        QPointF(360.0, 300.0),
+        QPointF(330.0, 350.0),
+        QPointF(330.0, 250.0),
+    ]
+    for sprite, position in zip(cluster, positions, strict=True):
+        sprite.move_center_to(position)
+
+    cluster[0].begin_physics(1400.0, 0.0, spin=-250.0)
+    physics = ThrowPhysics(
+        {str(index): sprite for index, sprite in enumerate(cluster)},
+        random.Random(1),
+    )
+
+    for _ in range(90):
+        for sprite in cluster:
+            sprite.advance(1.0 / 60.0, 800.0, 600.0)
+        physics.step(1.0 / 60.0, 800.0, 600.0)
+
+    assert not any(sprite.is_physics_active for sprite in cluster)
