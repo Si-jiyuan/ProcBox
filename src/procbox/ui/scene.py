@@ -4,6 +4,8 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QGraphicsScene, QGraphicsView
 
+from procbox import config
+
 
 class PenScene(QGraphicsScene):
     """Warm, dark backdrop with a subtle grid and a rounded pen outline."""
@@ -47,7 +49,7 @@ class PenView(QGraphicsView):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
@@ -57,6 +59,25 @@ class PenView(QGraphicsView):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        rect = QRectF(self.viewport().rect())
-        self.setSceneRect(rect)
-        self.viewport_resized.emit(rect)
+        viewport = self.viewport().size()
+        width = max(1.0, float(viewport.width()))
+        height = max(1.0, float(viewport.height()))
+        default_width = float(config.WINDOW_WIDTH)
+        default_height = float(config.WINDOW_HEIGHT)
+
+        if width >= default_width and height >= default_height:
+            scale = 1.0
+            scene_rect = QRectF(0.0, 0.0, width, height)
+        else:
+            scale = max(0.1, min(width / default_width, height / default_height))
+            scene_rect = QRectF(0.0, 0.0, default_width, default_height)
+
+        self.resetTransform()
+        if scale != 1.0:
+            self.scale(scale, scale)
+        if self.scene() is not None:
+            self.scene().setSceneRect(scene_rect)
+        self.setSceneRect(scene_rect)
+        self.resetCachedContent()
+        self.viewport_resized.emit(scene_rect)
+        self.viewport().update()

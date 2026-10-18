@@ -949,6 +949,8 @@ class AppSprite(QGraphicsObject):
         outline_color = DEAD_OUTLINE if dead else LIMB_OUTLINE
         cx = BODY.center().x()
         static = dead or self._knocked_down
+        pivot = QPointF(self._size / 2.0, self._size / 2.0)
+        theta = math.radians(self.rotation()) if static else 0.0
 
         cheering = self._chatting or (self._spectating and not self.is_gathering)
         if static or cheering or self._fighting or self.is_resting:
@@ -979,7 +981,19 @@ class AppSprite(QGraphicsObject):
 
         for side in (-1, 1):
             shoulder = QPointF(cx + side * 20.0, BODY.top() + 36.0)
-            if cheering:
+            if static:
+                shoulder_world = self._rotate_point(shoulder, pivot, theta)
+                hand_world = QPointF(
+                    shoulder_world.x() + side * 4.0,
+                    shoulder_world.y() + 20.0,
+                )
+                control_world = QPointF(
+                    (shoulder_world.x() + hand_world.x()) / 2.0 + side * 3.0,
+                    shoulder_world.y() + 10.0,
+                )
+                hand = self._rotate_point(hand_world, pivot, -theta)
+                control = self._rotate_point(control_world, pivot, -theta)
+            elif cheering:
                 wave = math.sin(self._anim_time * 7.0 + side) * 3.0
                 hand = QPointF(cx + side * 38.0, BODY.top() + 12.0 + wave)
                 control = QPointF(cx + side * 34.0, 48.0)
@@ -1005,6 +1019,19 @@ class AppSprite(QGraphicsObject):
             painter.setPen(QPen(outline_color, 1.5))
             painter.setBrush(limb_color)
             painter.drawEllipse(hand, 3.6, 3.6)
+
+    @staticmethod
+    def _rotate_point(point: QPointF, pivot: QPointF, angle: float) -> QPointF:
+        if angle == 0.0:
+            return point
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
+        dx = point.x() - pivot.x()
+        dy = point.y() - pivot.y()
+        return QPointF(
+            pivot.x() + dx * cosine - dy * sine,
+            pivot.y() + dx * sine + dy * cosine,
+        )
 
     def _draw_wound(self, painter: QPainter) -> None:
         if not self._alive or self._grudge_remaining <= 0.0:
