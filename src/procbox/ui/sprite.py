@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import random
+from enum import Enum
 
 from PySide6.QtCore import (
     QEasingCurve,
@@ -26,6 +27,11 @@ LIMB_OUTLINE = QColor("#FFFFFF")
 DEAD_LIMB = QColor("#B8B8B8")
 DEAD_OUTLINE = QColor("#EEEEEE")
 GROAN_LINES = ["呃…", "啊…", "唔…", "好痛…", "咳…"]
+
+
+class LyingPose(Enum):
+    PRONE = "prone"
+    SUPINE = "supine"
 
 
 class AppSprite(QGraphicsObject):
@@ -82,6 +88,7 @@ class AppSprite(QGraphicsObject):
         self._grudge_remaining = 0.0
         self._wound_side = self._rng.choice((-1.0, 1.0))
         self._knocked_down = False
+        self._lying_pose = LyingPose.PRONE
         self._down_remaining = 0.0
         self._down_groan_timer = 0.0
 
@@ -130,6 +137,10 @@ class AppSprite(QGraphicsObject):
     @property
     def is_knocked_down(self) -> bool:
         return self._knocked_down
+
+    @property
+    def lying_pose(self) -> LyingPose:
+        return self._lying_pose
 
     @property
     def is_helping(self) -> bool:
@@ -395,10 +406,15 @@ class AppSprite(QGraphicsObject):
         self._expression_timer = self._grudge_remaining
         self._wake_up()
 
-    def knock_down(self, duration: float | None = None) -> None:
+    def knock_down(
+        self,
+        duration: float | None = None,
+        pose: LyingPose | None = None,
+    ) -> None:
         if not self._alive:
             return
         self._knocked_down = True
+        self._lying_pose = pose or self._rng.choice([LyingPose.PRONE, LyingPose.SUPINE])
         self._chatting = False
         self._fighting = False
         self._spectating = False
@@ -419,7 +435,10 @@ class AppSprite(QGraphicsObject):
         self.update()
 
         self._fall_anim.stop()
-        target = self._rng.choice((-1.0, 1.0)) * self._rng.uniform(80.0, 94.0)
+        if self._lying_pose is LyingPose.PRONE:
+            target = self._rng.choice((-1.0, 1.0)) * self._rng.uniform(80.0, 94.0)
+        else:
+            target = 90.0 + self._rng.uniform(-8.0, 8.0)
         self._fall_anim.setDuration(620)
         self._fall_anim.setStartValue(self.rotation())
         self._fall_anim.setEndValue(target)
@@ -625,10 +644,11 @@ class AppSprite(QGraphicsObject):
         if self._alive:
             self._bubble.show_message(text, duration_ms)
 
-    def die(self) -> None:
+    def die(self, pose: LyingPose | None = None) -> None:
         if not self._alive:
             return
         self._alive = False
+        self._lying_pose = pose or self._rng.choice([LyingPose.PRONE, LyingPose.SUPINE])
         self._chatting = False
         self._fighting = False
         self._spectating = False
@@ -654,7 +674,10 @@ class AppSprite(QGraphicsObject):
         self.update()
 
         self._fall_anim.stop()
-        target = self._rng.choice((-1.0, 1.0)) * self._rng.uniform(72.0, 96.0)
+        if self._lying_pose is LyingPose.PRONE:
+            target = self._rng.choice((-1.0, 1.0)) * self._rng.uniform(72.0, 96.0)
+        else:
+            target = 90.0 + self._rng.uniform(-8.0, 8.0)
         self._fall_anim.setDuration(560)
         self._fall_anim.setStartValue(self.rotation())
         self._fall_anim.setEndValue(target)
