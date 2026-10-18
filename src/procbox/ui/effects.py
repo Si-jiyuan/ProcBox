@@ -148,16 +148,31 @@ class EffectArt:
 
     @classmethod
     def _network(cls, painter: QPainter, phase: float) -> None:
+        _arm(
+            painter,
+            QPointF(27.0, 45.0),
+            QPointF(30.0, 55.0),
+            QPointF(26.0, 63.0),
+        )
+
         painter.setPen(QPen(OUTLINE, 1.5))
         painter.setBrush(PHONE)
-        painter.drawRoundedRect(QRectF(60.0, 46.0, 22.0, 30.0), 5.0, 5.0)
+        painter.drawRoundedRect(QRectF(4.0, 46.0, 22.0, 30.0), 5.0, 5.0)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(SCREEN_LIGHT)
-        painter.drawRoundedRect(QRectF(63.0, 50.0, 16.0, 21.0), 2.0, 2.0)
+        painter.drawRoundedRect(QRectF(7.0, 50.0, 16.0, 21.0), 2.0, 2.0)
         painter.setBrush(QColor("#FFFFFF"))
-        painter.drawRoundedRect(QRectF(67.0, 55.0, 8.0, 6.0), 1.5, 1.5)
+        painter.drawRoundedRect(QRectF(11.0, 55.0, 8.0, 6.0), 1.5, 1.5)
+        _hand(painter, QPointF(26.0, 62.0))
 
-        center = QPointF(74.0, 39.0)
+        _arm(
+            painter,
+            QPointF(66.0, 45.0),
+            QPointF(71.0, 57.0),
+            QPointF(72.0, 65.0),
+        )
+
+        center = QPointF(15.0, 39.0)
         for index in range(3):
             radius = 5.0 + index * 3.5 + phase * 1.5
             alpha = int(220 * (0.55 + 0.45 * math.sin(phase * math.tau + index)))
@@ -165,22 +180,9 @@ class EffectArt:
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawArc(
                 QRectF(center.x() - radius, center.y() - radius, radius * 2, radius * 2),
-                -55 * 16,
+                125 * 16,
                 110 * 16,
             )
-
-        _arm(
-            painter,
-            QPointF(66.0, 48.0),
-            QPointF(67.0, 57.0),
-            QPointF(70.0, 65.0),
-        )
-        _arm(
-            painter,
-            QPointF(27.0, 45.0),
-            QPointF(23.0, 57.0),
-            QPointF(24.0, 64.0 + math.sin(phase * math.tau) * 1.5),
-        )
 
     @classmethod
     def _camera(cls, painter: QPainter, phase: float) -> None:

@@ -175,6 +175,7 @@ class ChatDirector(QObject):
                 sprite
                 for sprite in self._sprites.values()
                 if sprite.is_alive
+                and not sprite.is_activity_animating
                 and not sprite.is_fighting
                 and not sprite.is_spectating
                 and not sprite.is_helping
@@ -262,6 +263,7 @@ class ChatDirector(QObject):
                 sprite
                 for sprite in self._sprites.values()
                 if sprite.is_alive
+                and not sprite.is_activity_animating
                 and not sprite.is_chatting
                 and not sprite.is_fighting
                 and not sprite.is_spectating

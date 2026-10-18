@@ -301,6 +301,7 @@ class FightDirector(QObject):
             sprite
             for sprite in self._sprites.values()
             if sprite.is_alive
+            and not sprite.is_activity_animating
             and not sprite.is_chatting
             and not sprite.is_fighting
             and not sprite.is_spectating
@@ -451,6 +452,8 @@ class FightDirector(QObject):
                 continue
             if not sprite.is_alive or sprite.is_chatting or sprite.is_fighting:
                 continue
+            if sprite.is_activity_animating:
+                continue
             if sprite.is_spectating or sprite.is_helping:
                 continue
             if sprite.is_fleeing or sprite.is_chasing or sprite.is_caring:
@@ -491,6 +494,8 @@ class FightDirector(QObject):
             if sprite is first or sprite is second:
                 continue
             if not sprite.is_alive:
+                continue
+            if sprite.is_activity_animating:
                 continue
             if sprite.is_chatting or sprite.is_fighting or sprite.is_spectating:
                 continue

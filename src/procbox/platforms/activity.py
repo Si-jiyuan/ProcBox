@@ -16,6 +16,7 @@ class ActivitySnapshot:
     network_pids: set[int] = field(default_factory=set)
     audio_input_pids: set[int] = field(default_factory=set)
     audio_output_pids: set[int] = field(default_factory=set)
+    camera_active: bool = False
     camera_pid: int | None = None
     frontmost_pid: int | None = None
     warnings: list[str] = field(default_factory=list)
@@ -85,6 +86,7 @@ class ActivityMonitor:
                 network_pids=network,
                 audio_input_pids=audio_in,
                 audio_output_pids=audio_out,
+                camera_active=self._camera,
                 camera_pid=self._camera_pid,
                 frontmost_pid=self._frontmost,
                 warnings=list(self._warnings),

@@ -150,7 +150,7 @@ func installKeyboardTap() {
 
 installKeyboardTap()
 
-Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
     let audio = audioProcesses()
     emit([
         "audio_in": audio.input,

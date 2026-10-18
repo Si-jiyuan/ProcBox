@@ -247,6 +247,7 @@ class AppSprite(QGraphicsObject):
             or self._caring
             or self._dragging
             or self._recovering
+            or self.is_activity_animating
         )
 
     def can_be_dragged(self) -> bool:
@@ -255,6 +256,10 @@ class AppSprite(QGraphicsObject):
     @property
     def activity_effect(self) -> Effect | None:
         return self._activity_effect
+
+    @property
+    def is_activity_animating(self) -> bool:
+        return self._activity_effect is not None
 
     @property
     def is_grudging(self) -> bool:
@@ -271,6 +276,13 @@ class AppSprite(QGraphicsObject):
     @property
     def size(self) -> float:
         return self._size
+
+    @property
+    def facing(self) -> float:
+        return self._facing
+
+    def set_facing(self, facing: float) -> None:
+        self._facing = 1.0 if facing >= 0.0 else -1.0
 
     @property
     def center_scene(self) -> QPointF:
@@ -818,7 +830,9 @@ class AppSprite(QGraphicsObject):
         self._activity_target = effect
         if effect is not None:
             if self._rest_remaining > 0.0:
+                facing = self.facing
                 self._wake_up()
+                self.set_facing(facing)
             self._activity_effect = effect
             self._activity_progress = 0.0
             self._activity_time = 0.0
@@ -1378,6 +1392,12 @@ class AppSprite(QGraphicsObject):
         zoom = 0.88 + 0.12 * self._activity_progress
         painter.scale(zoom, zoom)
         painter.translate(-center)
+        mirror = (effect is Effect.NETWORK and self._facing > 0.0) or (
+            effect is Effect.AUDIO and self._facing < 0.0
+        )
+        if mirror:
+            painter.translate(self._size, 0.0)
+            painter.scale(-1.0, 1.0)
         painter.drawPixmap(0.0, 0.0, frame)
         painter.restore()
 

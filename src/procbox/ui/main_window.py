@@ -114,7 +114,11 @@ class MainWindow(QMainWindow):
             self,
         )
         self._physics = ThrowPhysics(self._sprites, self._rng)
-        self._presence = ActivityEffectDirector(self._sprites, self)
+        self._presence = ActivityEffectDirector(
+            self._sprites,
+            self,
+            interrupt=self._interrupt_social,
+        )
 
         self._build_preview_menu()
         self._clock = QElapsedTimer()
@@ -270,12 +274,28 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_drag_started(self, app_id: str) -> None:
+        self._interrupt_social(app_id)
+
+    def _interrupt_social(self, app_id: str) -> None:
         sprite = self._sprites.get(app_id)
         if sprite is None:
             return
+        facing = sprite.facing
         self._chat.interrupt_for(sprite)
         self._fight.interrupt_for(sprite)
         self._care.interrupt_for(sprite)
+        if sprite.is_chatting:
+            sprite.end_chat()
+        if sprite.is_spectating or sprite.is_helping:
+            sprite.end_watch()
+        if sprite.is_caring:
+            sprite.end_care()
+        if sprite.is_fleeing or sprite.is_chasing:
+            sprite.end_chase()
+        if sprite.is_fighting:
+            sprite.cancel_fight()
+        sprite.hide_bubble()
+        sprite.set_facing(facing)
 
     @Slot(QRectF)
     def _on_view_resized(self, rect: QRectF) -> None:

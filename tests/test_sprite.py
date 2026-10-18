@@ -705,3 +705,14 @@ def test_activity_effect_expression_clears_with_effect(qapp: QApplication) -> No
         sprite.advance(0.05, 800.0, 600.0)
     assert sprite.activity_effect is None
     assert sprite.expression is not Expression.FOCUSED
+
+
+def test_activity_animating_sprite_is_not_bumpable(qapp: QApplication) -> None:
+    from procbox.ui.effects import Effect
+
+    sprite = make_sprite(random.Random(6))
+    assert sprite.can_be_bumped
+
+    sprite.set_activity_effect(Effect.NETWORK)
+    assert sprite.is_activity_animating
+    assert not sprite.can_be_bumped

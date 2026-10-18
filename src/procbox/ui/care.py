@@ -83,6 +83,8 @@ class CareDirector(QObject):
         for friend in self._sprites.values():
             if friend is downed or not friend.is_alive:
                 continue
+            if friend.is_activity_animating:
+                continue
             if friend.is_chatting or friend.is_fighting or friend.is_spectating:
                 continue
             if friend.is_helping or friend.is_fleeing or friend.is_chasing:
