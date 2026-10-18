@@ -106,7 +106,7 @@ class ThrowPhysics:
                 other.bump_physics(
                     nx * bounce * 0.9 + tangent_x * tangent * 0.2,
                     ny * bounce * 0.9 + tangent_y * tangent * 0.2,
-                    spin=-bounce * 0.04,
+                    spin=bounce * 0.45,
                     energy=energy,
                 )
                 other.add_physics_impact()
@@ -117,6 +117,7 @@ class ThrowPhysics:
                 -nx * bounce + tangent_x * tangent * 0.6,
                 -ny * bounce + tangent_y * tangent * 0.6,
             )
+            mover.set_physics_angular(mover.physics_speed * 0.45)
             mover.add_physics_impact()
 
             # Bounce off at most one object in this substep. Chaining several

@@ -14,11 +14,11 @@ from procbox.core.models import AppInfo
 from procbox.core.motion import Motion
 from procbox.core.relationships import RelationshipBook
 from procbox.ui.care import CareDirector
-from procbox.ui.chat import CONVERSATIONS
+from procbox.ui.chat import CONVERSATIONS, ChatDirector
 from procbox.ui.face import Expression
 from procbox.ui.fight import BAD_LINES, SPECTATOR_LINES, FightCloud, FightDirector
 from procbox.ui.physics import ThrowPhysics
-from procbox.ui.sprite import AppSprite
+from procbox.ui.sprite import AppSprite, LyingPose
 
 
 @pytest.fixture(scope="module")
@@ -590,3 +590,93 @@ def test_crowded_collision_cluster_settles(qapp: QApplication) -> None:
         physics.step(1.0 / 60.0, 800.0, 600.0)
 
     assert not any(sprite.is_physics_active for sprite in cluster)
+
+
+def test_landing_head_side_selects_get_up_pose(qapp: QApplication) -> None:
+    sprite = make_sprite(random.Random(110))
+    sprite.begin_physics(0.0, 0.0)
+    sprite.setRotation(80.0)
+    sprite.stop_physics()
+    assert sprite.lying_pose is LyingPose.PRONE
+    assert sprite._fall_anim.endValue() > 0.0
+
+    sprite = make_sprite(random.Random(111))
+    sprite.begin_physics(0.0, 0.0)
+    sprite.setRotation(-80.0)
+    sprite.stop_physics()
+    assert sprite.lying_pose is LyingPose.SUPINE
+    assert sprite._fall_anim.endValue() < 0.0
+
+
+def test_dragging_interrupts_knockdown(qapp: QApplication) -> None:
+    sprite = make_sprite(random.Random(112))
+    sprite.knock_down(duration=30.0)
+    assert sprite.is_knocked_down
+
+    assert sprite.begin_drag(sprite.center_scene)
+    assert sprite.is_dragging
+    assert not sprite.is_knocked_down
+
+    sprite.cancel_drag()
+
+
+def test_dragging_a_fighter_stops_the_fight(qapp: QApplication) -> None:
+    scene = QGraphicsScene()
+    scene.setSceneRect(0.0, 0.0, 800.0, 600.0)
+    first = make_sprite(random.Random(113), "/Applications/First.app", "First")
+    second = make_sprite(random.Random(114), "/Applications/Second.app", "Second")
+    spectator = make_sprite(random.Random(115), "/Applications/Spectator.app", "Spectator")
+    for sprite in (first, second, spectator):
+        scene.addItem(sprite)
+    first.move_center_to(QPointF(300.0, 300.0))
+    second.move_center_to(QPointF(350.0, 300.0))
+    spectator.move_center_to(QPointF(420.0, 300.0))
+
+    director = FightDirector(
+        scene,
+        {"first": first, "second": second, "spectator": spectator},
+        random.Random(1),
+    )
+    director._start_fight(first, second, (id(first), id(second)), time.monotonic())
+    assert first.is_fighting
+    assert spectator.is_spectating
+
+    assert first.begin_drag(first.center_scene)
+    director.interrupt_for(first)
+
+    assert director._active is None
+    assert not first.is_fighting
+    assert not second.is_fighting
+    assert not spectator.is_spectating
+    assert director._cloud is None
+
+    first.cancel_drag()
+    director.stop()
+
+
+def test_dragging_a_chat_partner_stops_the_chat(qapp: QApplication) -> None:
+    scene = QGraphicsScene()
+    scene.setSceneRect(0.0, 0.0, 800.0, 600.0)
+    first = make_sprite(random.Random(116), "/Applications/First.app", "First")
+    second = make_sprite(random.Random(117), "/Applications/Second.app", "Second")
+    scene.addItem(first)
+    scene.addItem(second)
+
+    director = ChatDirector(
+        scene,
+        {"first": first, "second": second},
+        random.Random(1),
+    )
+    director._active_pair = (first, second)
+    first.begin_chat()
+    second.begin_chat()
+
+    assert first.begin_drag(first.center_scene)
+    director.interrupt_for(first)
+
+    assert director._active_pair is None
+    assert not first.is_chatting
+    assert not second.is_chatting
+
+    first.cancel_drag()
+    director.stop()

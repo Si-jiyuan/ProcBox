@@ -251,6 +251,43 @@ class FightDirector(QObject):
         self._notorious_opponent = None
         self._notorious_helpers = []
 
+    def interrupt_for(self, sprite: AppSprite) -> None:
+        if self._chase_target is not None and (
+            sprite is self._chase_target or sprite in self._chasers
+        ):
+            self._abort_chase()
+
+        pair = self._active
+        if pair is not None and sprite in pair:
+            self._cancel_fight()
+            return
+
+        spectators_before = len(self._spectators)
+        self._spectators = [member for member in self._spectators if member is not sprite]
+        self._notorious_helpers = [
+            member for member in self._notorious_helpers if member is not sprite
+        ]
+        if len(self._spectators) != spectators_before:
+            self._layout_spectators()
+
+    def _cancel_fight(self) -> None:
+        self._crowd_timer.stop()
+        self._join_timer.stop()
+        pair = self._active
+        self._active = None
+        self._midpoint = None
+        self._token += 1
+        self._end_spectators()
+        self._clear_cloud()
+        self._notorious_fighter = None
+        self._notorious_opponent = None
+        self._notorious_helpers = []
+        if pair is not None:
+            for sprite in pair:
+                if sprite.is_alive:
+                    sprite.cancel_fight()
+        self._global_ready = time.monotonic() + 5.0
+
     def _check_collisions(self) -> None:
         if self._chase_target is not None:
             return
@@ -764,11 +801,12 @@ class FightDirector(QObject):
         self._chasers = []
         self._chase_grace_until = 0.0
         self._chase_timer.stop()
-        if notorious is not None and notorious.is_alive:
+        if notorious is not None and notorious.is_alive and not notorious.is_dragging:
             notorious.end_chase()
         for chaser in chasers:
-            if chaser.is_alive:
+            if chaser.is_alive and not chaser.is_dragging:
                 chaser.end_chase()
+        self._global_ready = time.monotonic() + GLOBAL_COOLDOWN
 
     @staticmethod
     def _badmouth(sprite: AppSprite, line: str) -> None:

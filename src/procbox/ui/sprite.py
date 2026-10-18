@@ -38,6 +38,7 @@ LIMB_OUTLINE = QColor("#FFFFFF")
 DEAD_LIMB = QColor("#B8B8B8")
 DEAD_OUTLINE = QColor("#EEEEEE")
 GROAN_LINES = ["呃…", "啊…", "唔…", "好痛…", "咳…"]
+PHYSICS_ROLL_RATE = 0.45
 
 
 class LyingPose(Enum):
@@ -49,6 +50,7 @@ class AppSprite(QGraphicsObject):
     """One app icon with Q-style limbs, a face and a tiny social life."""
 
     activated = Signal(str)
+    drag_started = Signal(str)
 
     def __init__(
         self,
@@ -107,6 +109,8 @@ class AppSprite(QGraphicsObject):
 
         self._hovered = False
         self._dragging = False
+        self._drag_pending = False
+        self._drag_pending_pos = QPointF()
         self._drag_offset = QPointF()
         self._drag_start = QPointF()
         self._drag_history: list[tuple[float, QPointF]] = []
@@ -236,17 +240,7 @@ class AppSprite(QGraphicsObject):
         )
 
     def can_be_dragged(self) -> bool:
-        return self._alive and not (
-            self._knocked_down
-            or self._chatting
-            or self._fighting
-            or self._spectating
-            or self._helping
-            or self._fleeing
-            or self._chasing
-            or self._caring
-            or self._recovering
-        )
+        return self._alive and not self._dragging
 
     @property
     def is_grudging(self) -> bool:
@@ -782,6 +776,24 @@ class AppSprite(QGraphicsObject):
         if self._alive:
             self._bubble.show_message(text, duration_ms)
 
+    def hide_bubble(self) -> None:
+        self._bubble.hide_now()
+
+    def cancel_fight(self) -> None:
+        if not self._alive:
+            return
+        self._fighting = False
+        self._bubble.hide_now()
+        if not self._dragging:
+            if self.is_grudging:
+                self._expression = Expression.ANGRY
+                self._expression_timer = self._grudge_remaining
+            else:
+                self._expression = Expression.HAPPY
+                self._expression_timer = self._rng.uniform(2.0, 4.5)
+            self._wake_up()
+        self.update()
+
     def die(self, pose: LyingPose | None = None) -> None:
         if not self._alive:
             return
@@ -876,11 +888,20 @@ class AppSprite(QGraphicsObject):
         self.pop_in()
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.begin_drag(event.scenePos())
+        if event.button() == Qt.MouseButton.LeftButton and self._alive and not self._dragging:
+            self._drag_pending = True
+            self._drag_pending_pos = QPointF(event.scenePos())
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
         event.accept()
 
     def mouseMoveEvent(self, event) -> None:
+        if self._drag_pending and not self._dragging:
+            dx = event.scenePos().x() - self._drag_pending_pos.x()
+            dy = event.scenePos().y() - self._drag_pending_pos.y()
+            if dx * dx + dy * dy >= 16.0 and self.begin_drag(self._drag_pending_pos):
+                self.drag_to(event.scenePos())
+            event.accept()
+            return
         if self._dragging:
             self.drag_to(event.scenePos())
         event.accept()
@@ -888,9 +909,13 @@ class AppSprite(QGraphicsObject):
     def mouseReleaseEvent(self, event) -> None:
         if self._dragging:
             self.release_drag(event.scenePos())
+        elif self._drag_pending:
+            self._drag_pending = False
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
         event.accept()
 
     def mouseDoubleClickEvent(self, event) -> None:
+        self._drag_pending = False
         if self._dragging:
             self.cancel_drag()
         if self._alive:
@@ -924,21 +949,27 @@ class AppSprite(QGraphicsObject):
     def begin_drag(self, scene_pos: QPointF) -> bool:
         if self._dragging or not self.can_be_dragged():
             return False
-        if self._physics_active or self._recovering:
-            self.prepareGeometryChange()
-        self._physics_active = False
-        self._physics_vx = 0.0
-        self._physics_vy = 0.0
-        self._physics_angular = 0.0
-        self._physics_spin = 0.0
-        self._impact_timer = 0.0
-        self.setRotation(0.0)
+        self._clear_pointer_state()
+        self._drag_pending = False
+        self._chatting = False
+        self._fighting = False
+        self._spectating = False
+        self._helping = False
+        self._fleeing = False
+        self._chasing = False
+        self._caring = False
+        self._watch_target = None
+        self._watch_focus = None
+        self._chase_target = None
+        self._knocked_down = False
+        self._down_remaining = 0.0
+        self._down_groan_timer = 0.0
+        self._rest_remaining = 0.0
         self._dragging = True
         self._hovered = False
         self._drag_offset = scene_pos - self.pos()
         self._drag_start = QPointF(scene_pos)
         self._drag_history = [(time.monotonic(), QPointF(scene_pos))]
-        self._rest_remaining = 0.0
         self._expression = Expression.SURPRISED
         self._expression_timer = 99.0
         self._bubble.hide_now()
@@ -948,6 +979,7 @@ class AppSprite(QGraphicsObject):
         self.setCursor(Qt.CursorShape.ClosedHandCursor)
         QToolTip.hideText()
         self.update()
+        self.drag_started.emit(self._app.app_id)
         return True
 
     def drag_to(self, scene_pos: QPointF) -> None:
@@ -999,7 +1031,7 @@ class AppSprite(QGraphicsObject):
             speed = 1_700.0
 
         if speed >= 80.0:
-            self.begin_physics(vx, vy, spin=-vx * 0.18 + vy * 0.08)
+            self.begin_physics(vx, vy, spin=speed * PHYSICS_ROLL_RATE)
         else:
             self._expression = Expression.HAPPY
             self._expression_timer = self._rng.uniform(2.0, 4.5)
@@ -1111,6 +1143,9 @@ class AppSprite(QGraphicsObject):
         self._physics_vx *= factor
         self._physics_vy *= factor
 
+    def set_physics_angular(self, angular: float) -> None:
+        self._physics_angular = angular
+
     def integrate_physics(self, dt: float, width: float, height: float) -> None:
         if not self._physics_active:
             return
@@ -1141,6 +1176,7 @@ class AppSprite(QGraphicsObject):
 
         if bounced:
             self._impact_timer = 0.16
+            self._physics_angular = math.hypot(vx, vy) * PHYSICS_ROLL_RATE
         self._physics_vx = vx
         self._physics_vy = vy
         self._motion = Motion(x, y, vx, vy)
@@ -1205,11 +1241,14 @@ class AppSprite(QGraphicsObject):
         self._expression_timer = 99.0
         self.setZValue(self.pos().y() + self._size)
 
-        self._lying_pose = self._rng.choice([LyingPose.PRONE, LyingPose.SUPINE])
+        rotation = (self.rotation() + 180.0) % 360.0 - 180.0
+        self.setRotation(rotation)
+        head_x = math.sin(math.radians(rotation))
+        self._lying_pose = LyingPose.PRONE if head_x >= 0.0 else LyingPose.SUPINE
         if self._lying_pose is LyingPose.PRONE:
-            target = self._rng.choice((-1.0, 1.0)) * self._rng.uniform(80.0, 94.0)
+            target = self._rng.uniform(80.0, 98.0)
         else:
-            target = 90.0 + self._rng.uniform(-8.0, 8.0)
+            target = -self._rng.uniform(80.0, 98.0)
         self._fall_anim.stop()
         self._fall_anim.setDuration(260)
         self._fall_anim.setStartValue(self.rotation())

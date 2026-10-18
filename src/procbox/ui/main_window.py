@@ -187,6 +187,7 @@ class MainWindow(QMainWindow):
     def _create_sprite(self, app: AppInfo) -> AppSprite:
         sprite = AppSprite(app)
         sprite.activated.connect(self._activate_app)
+        sprite.drag_started.connect(self._on_drag_started)
         self._scene.addItem(sprite)
         x, y = self._spawn_position(sprite.size)
         sprite.place(x, y)
@@ -223,6 +224,15 @@ class MainWindow(QMainWindow):
         sprite = self._sprites.get(app_id)
         if sprite is not None and sprite.is_alive:
             self._adapter.activate(sprite.app)
+
+    @Slot(str)
+    def _on_drag_started(self, app_id: str) -> None:
+        sprite = self._sprites.get(app_id)
+        if sprite is None:
+            return
+        self._chat.interrupt_for(sprite)
+        self._fight.interrupt_for(sprite)
+        self._care.interrupt_for(sprite)
 
     @Slot(QRectF)
     def _on_view_resized(self, rect: QRectF) -> None:

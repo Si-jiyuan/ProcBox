@@ -156,6 +156,17 @@ class ChatDirector(QObject):
                     sprite.end_chat()
             self._active_pair = None
 
+    def interrupt_for(self, sprite: AppSprite) -> None:
+        pair = self._active_pair
+        if pair is None or sprite not in pair:
+            return
+        self._active_pair = None
+        self._token += 1
+        for member in pair:
+            if member is not sprite and member.is_alive:
+                member.end_chat()
+                member.hide_bubble()
+
     def _maybe_chat(self) -> None:
         try:
             if self._active_pair is not None:

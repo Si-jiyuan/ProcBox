@@ -54,6 +54,11 @@ class CareDirector(QObject):
         for key in list(self._sessions):
             self._cancel(key)
 
+    def interrupt_for(self, sprite: AppSprite) -> None:
+        for key, session in list(self._sessions.items()):
+            if session.downed is sprite or session.friend is sprite:
+                self._cancel(key)
+
     def _check(self) -> None:
         for key, session in list(self._sessions.items()):
             if (
