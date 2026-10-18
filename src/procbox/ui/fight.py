@@ -5,7 +5,7 @@ import random
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QPointF, QRectF, QTimer, QVariantAnimation, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsObject, QGraphicsScene
 from shiboken6 import isValid
@@ -91,6 +91,7 @@ class FightCloud(QGraphicsObject):
         self.setZValue(900_000.0)
         self._progress = 0.0
         self._duration = max(0.5, duration_ms / 1_000.0)
+        self._started = time.monotonic()
         self._disposed = False
         self._dust = [
             (-20.0, 5.0, 22.0),
@@ -102,13 +103,10 @@ class FightCloud(QGraphicsObject):
         ]
         self._sparks = [(-28.0, -16.0, 11.0), (24.0, -20.0, 9.0), (2.0, 25.0, 8.0)]
 
-        self._anim = QVariantAnimation(self)
-        self._anim.setStartValue(0.0)
-        self._anim.setEndValue(1.0)
-        self._anim.setDuration(duration_ms)
-        self._anim.valueChanged.connect(self._set_progress)
-        self._anim.finished.connect(self._dispose)
-        self._anim.start()
+        self._timer = QTimer(self)
+        self._timer.setInterval(50)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
 
     def boundingRect(self) -> QRectF:
         return QRectF(-58.0, -48.0, 116.0, 96.0)
@@ -157,24 +155,24 @@ class FightCloud(QGraphicsObject):
 
         painter.restore()
 
-    def _set_progress(self, value) -> None:
-        self._progress = float(value)
+    def _tick(self) -> None:
+        elapsed = time.monotonic() - self._started
+        if elapsed >= self._duration:
+            self.dismiss()
+            return
+        self._progress = elapsed / self._duration
         self.update()
 
     def dismiss(self) -> None:
         if not isValid(self) or self._disposed:
             return
         self._disposed = True
-        if isValid(self._anim):
-            self._anim.stop()
+        self._timer.stop()
         scene = self.scene()
         if scene is not None:
             scene.removeItem(self)
         self.dismissed.emit()
         self.deleteLater()
-
-    def _dispose(self) -> None:
-        self.dismiss()
 
 
 class FightDirector(QObject):

@@ -13,7 +13,7 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QGraphicsDropShadowEffect, QGraphicsObject
+from PySide6.QtWidgets import QGraphicsObject
 
 from procbox import config
 from procbox.core.models import AppInfo
@@ -53,6 +53,8 @@ class AppSprite(QGraphicsObject):
         self._icon_png = app.icon_png
         self._color_pixmap = self._build_pixmap(app)
         self._gray_pixmap: QPixmap | None = None
+        self._face_cache: QPixmap | None = None
+        self._face_cache_key: tuple | None = None
 
         vx, vy = random_velocity(self._rng)
         self._motion = Motion(0.0, 0.0, vx, vy)
@@ -99,12 +101,6 @@ class AppSprite(QGraphicsObject):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setTransformOriginPoint(self._size / 2.0, self._size / 2.0)
         self.setToolTip(self._tooltip())
-
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(22.0)
-        shadow.setOffset(0.0, 7.0)
-        shadow.setColor(QColor(0, 0, 0, 120))
-        self.setGraphicsEffect(shadow)
 
         self._scale_anim = QPropertyAnimation(self, b"scale", self)
         self._fall_anim = QPropertyAnimation(self, b"rotation", self)
@@ -235,17 +231,11 @@ class AppSprite(QGraphicsObject):
         painter.rotate(tilt)
         painter.translate(-center)
 
+        self._draw_shadow(painter)
         self._draw_limbs(painter)
         pixmap = self._color_pixmap if self._alive else (self._gray_pixmap or self._color_pixmap)
         painter.drawPixmap(BODY.topLeft(), pixmap)
-        draw_face(
-            painter,
-            BODY,
-            self._expression,
-            self._blink_remaining > 0.0 or self._knocked_down,
-            self._look_x,
-            self._look_y,
-        )
+        self._draw_face_cached(painter)
         self._draw_wound(painter)
         painter.restore()
 
@@ -267,11 +257,9 @@ class AppSprite(QGraphicsObject):
         self._anim_time += dt
         if self._knocked_down:
             self._tick_down(dt)
-            self.update()
             return
 
         self._tick_face(dt)
-        self.update()
 
         if self._fleeing or self._chasing:
             self._tick_run(dt, width, height)
@@ -279,25 +267,29 @@ class AppSprite(QGraphicsObject):
 
         if self._caring:
             self._move_phase += dt * 8.0
-            self.update()
             return
 
         if self._spectating:
             if self._watch_target is not None:
                 self._tick_gather(dt, width, height)
+            else:
+                self.update()
             return
 
         if self._chatting or self._fighting:
+            self.update()
             return
 
         if self._rest_remaining > 0.0:
             self._rest_remaining -= dt
+            self.update()
             if self._rest_remaining <= 0.0:
                 self._wake_up()
             return
 
         self._rest_countdown -= dt
         if self._rest_countdown <= 0.0:
+            self.update()
             self._start_rest()
             return
 
@@ -742,13 +734,52 @@ class AppSprite(QGraphicsObject):
         event.accept()
 
     def hoverEnterEvent(self, event) -> None:
-        if self._alive and not self._knocked_down:
-            self._animate_scale(1.08, 130)
+        if self._alive:
+            self.setToolTip(self._tooltip())
+            if not self._knocked_down:
+                self._animate_scale(1.08, 130)
         event.accept()
 
     def hoverLeaveEvent(self, event) -> None:
         self._animate_scale(1.0, 160)
         event.accept()
+
+    def _face_key(self) -> tuple:
+        return (
+            self._expression,
+            self._blink_remaining > 0.0 or self._knocked_down,
+            round(self._look_x * 5.0) / 5.0,
+            round(self._look_y * 5.0) / 5.0,
+        )
+
+    def _draw_face_cached(self, painter: QPainter) -> None:
+        key = self._face_key()
+        if self._face_cache is None or key != self._face_cache_key:
+            cache = QPixmap(config.ICON_PIXELS, config.ICON_PIXELS)
+            cache.fill(Qt.GlobalColor.transparent)
+            cache.setDevicePixelRatio(2.0)
+            cache_painter = QPainter(cache)
+            cache_painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            draw_face(
+                cache_painter,
+                QRectF(0.0, 0.0, config.BODY_SIZE, config.BODY_SIZE),
+                self._expression,
+                self._blink_remaining > 0.0 or self._knocked_down,
+                self._look_x,
+                self._look_y,
+            )
+            cache_painter.end()
+            self._face_cache = cache
+            self._face_cache_key = key
+        painter.drawPixmap(BODY.topLeft(), self._face_cache)
+
+    def _draw_shadow(self, painter: QPainter) -> None:
+        shadow = QRectF(BODY.x() + 4.0, BODY.bottom() - 3.0, BODY.width() - 8.0, 14.0)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 40))
+        painter.drawEllipse(shadow)
+        painter.setBrush(QColor(0, 0, 0, 45))
+        painter.drawEllipse(shadow.adjusted(7.0, 2.0, -7.0, 0.0))
 
     def _tick_face(self, dt: float) -> None:
         if self._blink_remaining > 0.0:
@@ -1105,7 +1136,14 @@ class AppSprite(QGraphicsObject):
 
     def _tooltip(self) -> str:
         count = len(self._app.pids)
-        return f"{self._app.name}\n{count} 个进程\n双击切换到该 App"
+        memory = self._app.memory_bytes / (1024.0 * 1024.0)
+        return (
+            f"{self._app.name}\n"
+            f"内存 ≈ {memory:.1f} MB\n"
+            f"CPU {self._app.cpu_percent:.1f}%\n"
+            f"{count} 个进程\n"
+            "双击切换到该 App"
+        )
 
     def _build_pixmap(self, app: AppInfo) -> QPixmap:
         pixmap = QPixmap()

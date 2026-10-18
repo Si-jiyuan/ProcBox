@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import math
 import random
 import sys
+import time
 
 from PySide6.QtCore import (
     QElapsedTimer,
@@ -44,9 +46,11 @@ class _ScanWorker(QRunnable):
         try:
             apps = self._adapter.scan_apps()
         except Exception as exc:  # noqa: BLE001 - surface any platform failure
-            self.signals.failed.emit(str(exc))
+            with contextlib.suppress(RuntimeError):
+                self.signals.failed.emit(str(exc))
         else:
-            self.signals.finished.emit(apps)
+            with contextlib.suppress(RuntimeError):
+                self.signals.finished.emit(apps)
 
 
 class MainWindow(QMainWindow):
@@ -59,6 +63,9 @@ class MainWindow(QMainWindow):
         self._pending_scan = False
         self._active_worker: _ScanWorker | None = None
         self._last_error: str | None = None
+        self._first_scan_done = False
+        self._last_occlusion_check = 0.0
+        self._window_occluded = False
 
         self.setWindowTitle("ProcBox")
         self.resize(config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
@@ -139,6 +146,9 @@ class MainWindow(QMainWindow):
         self._apply_apps(apps)
         self.setWindowTitle(f"ProcBox · {len(apps)} 个应用")
         self._last_error = None
+        if not self._first_scan_done:
+            self._first_scan_done = True
+            QTimer.singleShot(1_000, self._request_scan)
 
     @Slot(str)
     def _on_scan_failed(self, message: str) -> None:
@@ -219,6 +229,21 @@ class MainWindow(QMainWindow):
     def _tick(self) -> None:
         if self.isMinimized():
             return
+
+        now = time.monotonic()
+        if now - self._last_occlusion_check >= 0.25:
+            self._last_occlusion_check = now
+            self._window_occluded = self._adapter.is_window_occluded(int(self.winId()))
+
+        handle = self.windowHandle()
+        if not self._window_occluded and handle is not None and not handle.isExposed():
+            return
+
+        desired_interval = (
+            config.TICK_INTERVAL_OCCLUDED_MS if self._window_occluded else config.TICK_INTERVAL_MS
+        )
+        if self._move_timer.interval() != desired_interval:
+            self._move_timer.setInterval(desired_interval)
         dt = min(self._clock.restart() / 1000.0, 0.05)
         width = self._scene.sceneRect().width()
         height = self._scene.sceneRect().height()

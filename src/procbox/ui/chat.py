@@ -5,13 +5,7 @@ import random
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import (
-    QObject,
-    QPointF,
-    QRectF,
-    QTimer,
-    QVariantAnimation,
-)
+from PySide6.QtCore import QObject, QPointF, QRectF, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsObject, QGraphicsScene
 
@@ -76,15 +70,14 @@ class HeartBurst(QGraphicsObject):
         self.setPos(center)
         self.setZValue(1_000_000.0)
         self._progress = 0.0
+        self._started = time.monotonic()
+        self._duration = 2.4
         self._hearts = [(-17.0, 8.0, 0.0, 1.0), (6.0, 16.0, 0.12, 1.15), (22.0, -2.0, 0.28, 0.8)]
 
-        self._anim = QVariantAnimation(self)
-        self._anim.setStartValue(0.0)
-        self._anim.setEndValue(1.0)
-        self._anim.setDuration(2_400)
-        self._anim.valueChanged.connect(self._set_progress)
-        self._anim.finished.connect(self._dispose)
-        self._anim.start()
+        self._timer = QTimer(self)
+        self._timer.setInterval(50)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
 
     def boundingRect(self) -> QRectF:
         return QRectF(-48.0, -64.0, 96.0, 100.0)
@@ -108,11 +101,16 @@ class HeartBurst(QGraphicsObject):
             painter.drawPath(_heart_path(11.0))
             painter.restore()
 
-    def _set_progress(self, value) -> None:
-        self._progress = float(value)
+    def _tick(self) -> None:
+        elapsed = time.monotonic() - self._started
+        if elapsed >= self._duration:
+            self._dispose()
+            return
+        self._progress = elapsed / self._duration
         self.update()
 
     def _dispose(self) -> None:
+        self._timer.stop()
         scene = self.scene()
         if scene is not None:
             scene.removeItem(self)

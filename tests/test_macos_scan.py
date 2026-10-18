@@ -57,3 +57,22 @@ def test_blacklisted_daemon_is_excluded() -> None:
 def test_daemon_without_bundle_is_excluded() -> None:
     proc = fake_proc("networkserviceproxyd", "/usr/libexec/networkserviceproxyd")
     assert _is_user_application(proc) is None
+
+
+def test_info_plist_selects_the_real_app_icon(tmp_path) -> None:
+    import plistlib
+
+    from procbox.platforms.macos import MacOSAdapter
+
+    bundle = tmp_path / "Demo.app"
+    resources = bundle / "Contents" / "Resources"
+    resources.mkdir(parents=True)
+    (resources / "aaa.icns").write_bytes(b"wrong")
+    (resources / "Demo AppIcon.icns").write_bytes(b"right")
+    with (bundle / "Contents" / "Info.plist").open("wb") as handle:
+        plistlib.dump({"CFBundleIconFile": "Demo AppIcon"}, handle)
+
+    selected = MacOSAdapter._preferred_icns_path(resources, str(bundle))
+
+    assert selected is not None
+    assert selected.name == "Demo AppIcon.icns"

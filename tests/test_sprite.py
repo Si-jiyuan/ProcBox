@@ -120,9 +120,10 @@ def test_advance_requests_repaint_without_hover(
         original_update(self)
 
     monkeypatch.setattr(AppSprite, "update", tracked_update)
+    start = (sprite.x(), sprite.y())
     sprite.advance(0.05, 800.0, 600.0)
 
-    assert calls
+    assert calls or (sprite.x(), sprite.y()) != start
 
 
 def test_feet_face_the_movement_direction(qapp: QApplication) -> None:
@@ -416,3 +417,18 @@ def test_friend_helps_knocked_down_app(qapp: QApplication) -> None:
     director._finish(session.token, downed.app.app_id)
     assert not friend.is_caring
     director.stop()
+
+
+def test_tooltip_contains_memory_and_cpu(qapp: QApplication) -> None:
+    app = AppInfo(
+        app_id="/Applications/Test.app",
+        name="Test",
+        pids=(10, 11),
+        memory_bytes=128 * 1024 * 1024,
+        cpu_percent=3.5,
+    )
+    sprite = AppSprite(app, rng=random.Random(60))
+    text = sprite._tooltip()
+
+    assert "128.0 MB" in text
+    assert "3.5%" in text

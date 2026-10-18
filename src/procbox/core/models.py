@@ -13,6 +13,8 @@ class AppInfo:
     bundle_path: str | None = None
     exe_path: str | None = None
     icon_png: bytes | None = None
+    memory_bytes: int = 0
+    cpu_percent: float = 0.0
 
     def with_pids(self, pids: tuple[int, ...]) -> AppInfo:
         return replace(self, pids=pids)

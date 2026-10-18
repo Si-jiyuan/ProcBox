@@ -32,5 +32,9 @@ class PlatformAdapter(ABC):
     def activate(self, app: AppInfo) -> bool:
         """Bring a running application to the foreground."""
 
+    def is_window_occluded(self, window_id: int) -> bool:
+        """Return True if the app window is fully covered by other windows."""
+        return False
+
     def shutdown(self) -> None:  # noqa: B027 - optional hook, not every platform needs it
         """Release platform resources, if any."""
