@@ -43,6 +43,7 @@ DRAG_ROPE_LENGTH = 42.0
 DRAG_SPRING = 85.0
 DRAG_DAMPING = 2.2
 DRAG_MAX_SPEED = 1_300.0
+DRAG_ROTATION_RESPONSE = 45.0
 
 
 class LyingPose(Enum):
@@ -1119,6 +1120,15 @@ class AppSprite(QGraphicsObject):
         self.setPos(x, y)
         self.setZValue(2_000_000.0)
 
+        toward_x = self._drag_anchor.x() - (x + BODY.center().x())
+        toward_y = self._drag_anchor.y() - (y + BODY.center().y())
+        if abs(toward_x) + abs(toward_y) > 0.01:
+            target = math.degrees(math.atan2(toward_y, toward_x)) + 90.0
+            current = self.rotation()
+            delta = (target - current + 180.0) % 360.0 - 180.0
+            blend = 1.0 - math.exp(-DRAG_ROTATION_RESPONSE * dt)
+            self.setRotation((current + delta * blend + 180.0) % 360.0 - 180.0)
+
     def release_drag(self, scene_pos: QPointF) -> None:
         if not self._dragging:
             return
@@ -1141,11 +1151,17 @@ class AppSprite(QGraphicsObject):
         self._drag_vel_x = 0.0
         self._drag_vel_y = 0.0
         if speed >= 80.0:
-            self.begin_physics(vx, vy, spin=self.roll_angular(vx, vy))
+            self.begin_physics(
+                vx,
+                vy,
+                spin=self.roll_angular(vx, vy),
+                initial_rotation=self.rotation(),
+            )
         else:
             self._expression = Expression.HAPPY
             self._expression_timer = self._rng.uniform(2.0, 4.5)
             self._wake_up()
+            self._settle_drag_rotation()
 
     def _clear_pointer_state(self) -> None:
         if self._physics_active or self._recovering:
@@ -1184,6 +1200,18 @@ class AppSprite(QGraphicsObject):
         self._expression = Expression.HAPPY
         self._expression_timer = self._rng.uniform(2.0, 4.5)
         self._wake_up()
+        self._settle_drag_rotation()
+
+    def _settle_drag_rotation(self) -> None:
+        if abs(self.rotation()) < 0.1:
+            self.setRotation(0.0)
+            return
+        self._fall_anim.stop()
+        self._fall_anim.setDuration(240)
+        self._fall_anim.setStartValue(self.rotation())
+        self._fall_anim.setEndValue(0.0)
+        self._fall_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fall_anim.start()
 
     def begin_physics(
         self,
@@ -1191,6 +1219,7 @@ class AppSprite(QGraphicsObject):
         vy: float,
         spin: float = 0.0,
         energy: float = 1.0,
+        initial_rotation: float | None = None,
     ) -> None:
         if not self._alive:
             return
@@ -1211,8 +1240,12 @@ class AppSprite(QGraphicsObject):
         self.set_physics_velocity(vx, vy)
         self.set_physics_energy(energy)
         self._physics_angular = spin
-        self._physics_spin = 0.0
-        self.setRotation(0.0)
+        if initial_rotation is None:
+            self._physics_spin = 0.0
+            self.setRotation(0.0)
+        else:
+            self._physics_spin = (initial_rotation + 180.0) % 360.0 - 180.0
+            self.setRotation(self._physics_spin)
         self._impact_timer = 0.16
         self._rest_remaining = 0.0
         self._expression = Expression.SCREAM

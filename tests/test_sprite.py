@@ -716,3 +716,27 @@ def test_activity_animating_sprite_is_not_bumpable(qapp: QApplication) -> None:
     sprite.set_activity_effect(Effect.NETWORK)
     assert sprite.is_activity_animating
     assert not sprite.can_be_bumped
+
+
+def _angle_distance(first: float, second: float) -> float:
+    return abs((first - second + 180.0) % 360.0 - 180.0)
+
+
+def test_dragged_sprite_turns_its_head_toward_cursor(qapp: QApplication) -> None:
+    sprite = make_sprite(random.Random(7))
+    center = sprite.center_scene
+    sprite.begin_drag(QPointF(center.x() + 150.0, center.y() + 40.0))
+    for _ in range(40):
+        sprite.advance(1.0 / 60.0, 800.0, 600.0)
+
+    anchor = sprite._drag_anchor
+    center = sprite.center_scene
+    expected = math.degrees(math.atan2(anchor.y() - center.y(), anchor.x() - center.x())) + 90.0
+    assert _angle_distance(sprite.rotation(), expected) < 3.0
+
+
+def test_thrown_sprite_keeps_its_drag_orientation(qapp: QApplication) -> None:
+    sprite = make_sprite(random.Random(8))
+    sprite.setRotation(75.0)
+    sprite.begin_physics(100.0, 0.0, initial_rotation=75.0)
+    assert _angle_distance(sprite.rotation(), 75.0) < 1.0
