@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import random
 import time
@@ -442,15 +443,17 @@ def test_drag_and_throw_sets_physics(qapp: QApplication) -> None:
     scene.addItem(sprite)
     sprite.place(100.0, 100.0)
 
-    assert sprite.begin_drag(QPointF(110.0, 110.0))
-    time.sleep(0.02)
-    sprite.drag_to(QPointF(140.0, 130.0))
-    time.sleep(0.02)
-    sprite.drag_to(QPointF(180.0, 160.0))
-    sprite.release_drag(QPointF(230.0, 200.0))
+    assert sprite.begin_drag(QPointF(250.0, 250.0))
+    endpoint = QPointF(250.0, 250.0)
+    for step in range(30):
+        angle = step * 0.45
+        endpoint = QPointF(250.0 + math.cos(angle) * 60.0, 250.0 + math.sin(angle) * 60.0)
+        sprite.drag_to(endpoint)
+        sprite.advance(1.0 / 30.0, 800.0, 600.0)
+    sprite.release_drag(endpoint)
 
     assert sprite.is_physics_active
-    assert sprite.physics_speed > 0.0
+    assert sprite.physics_speed >= 80.0
 
 
 def test_thrown_sprite_bumps_a_neighbour(qapp: QApplication) -> None:
@@ -685,3 +688,20 @@ def test_dragging_a_chat_partner_stops_the_chat(qapp: QApplication) -> None:
 def test_roll_direction_depends_on_horizontal_direction(qapp: QApplication) -> None:
     assert AppSprite.roll_angular(500.0, 0.0) > 0.0
     assert AppSprite.roll_angular(-500.0, 0.0) < 0.0
+
+
+def test_activity_effect_expression_clears_with_effect(qapp: QApplication) -> None:
+    from procbox.ui.effects import Effect
+
+    sprite = make_sprite(random.Random(4))
+    sprite.set_activity_effect(Effect.TYPING)
+    for _ in range(20):
+        sprite.advance(0.05, 800.0, 600.0)
+    assert sprite.expression is Expression.FOCUSED
+    assert sprite.activity_effect is Effect.TYPING
+
+    sprite.set_activity_effect(None)
+    for _ in range(20):
+        sprite.advance(0.05, 800.0, 600.0)
+    assert sprite.activity_effect is None
+    assert sprite.expression is not Expression.FOCUSED

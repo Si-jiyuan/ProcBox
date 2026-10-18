@@ -29,6 +29,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/procbox"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/procbox/platforms/bin/procbox-activity" = "procbox/platforms/bin/procbox-activity"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

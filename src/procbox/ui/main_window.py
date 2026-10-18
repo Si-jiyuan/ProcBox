@@ -17,7 +17,7 @@ from PySide6.QtCore import (
     Slot,
 )
 from PySide6.QtGui import QColor, QGuiApplication, QPalette
-from PySide6.QtWidgets import QMainWindow
+from PySide6.QtWidgets import QMainWindow, QMenu
 
 from procbox import config
 from procbox.core.models import AppInfo
@@ -25,8 +25,10 @@ from procbox.core.relationships import RelationshipBook
 from procbox.platforms.base import PlatformAdapter
 from procbox.ui.care import CareDirector
 from procbox.ui.chat import ChatDirector
+from procbox.ui.effects import Effect
 from procbox.ui.fight import FightDirector
 from procbox.ui.physics import ThrowPhysics
+from procbox.ui.presence import ActivityEffectDirector
 from procbox.ui.scene import PenScene, PenView
 from procbox.ui.sprite import AppSprite
 
@@ -65,6 +67,7 @@ class MainWindow(QMainWindow):
         self._active_worker: _ScanWorker | None = None
         self._last_error: str | None = None
         self._first_scan_done = False
+        self._last_hovered_app: str | None = None
         self._last_occlusion_check = 0.0
         self._window_occluded = False
         self._occlusion_supported = (
@@ -111,7 +114,9 @@ class MainWindow(QMainWindow):
             self,
         )
         self._physics = ThrowPhysics(self._sprites, self._rng)
+        self._presence = ActivityEffectDirector(self._sprites, self)
 
+        self._build_preview_menu()
         self._clock = QElapsedTimer()
         self._clock.start()
 
@@ -126,6 +131,39 @@ class MainWindow(QMainWindow):
         self._scan_timer.start()
 
         QTimer.singleShot(0, self._request_scan)
+
+    def _build_preview_menu(self) -> None:
+        menu = QMenu("效果预览", self)
+        self.menuBar().addMenu(menu)
+        for label, effect in (
+            ("键盘输入", Effect.TYPING),
+            ("网络传输", Effect.NETWORK),
+            ("摄像头", Effect.CAMERA),
+            ("音响播放", Effect.AUDIO),
+        ):
+            action = menu.addAction(label)
+            action.triggered.connect(
+                lambda checked=False, selected=effect: self._preview_effect(selected)
+            )
+        menu.addSeparator()
+        clear = menu.addAction("清除预览")
+        clear.triggered.connect(self._clear_effect_previews)
+
+    @Slot()
+    def _preview_effect(self, effect: Effect) -> None:
+        app_id = self._last_hovered_app
+        sprite = self._sprites.get(app_id) if app_id is not None else None
+        if sprite is None or not sprite.is_alive:
+            sprite = next(
+                (candidate for candidate in self._sprites.values() if candidate.is_alive),
+                None,
+            )
+        if sprite is not None:
+            self._presence.preview(sprite.app.app_id, effect)
+
+    @Slot()
+    def _clear_effect_previews(self) -> None:
+        self._presence.clear_previews()
 
     def _apply_palette(self) -> None:
         palette = self.palette()
@@ -188,6 +226,7 @@ class MainWindow(QMainWindow):
         sprite = AppSprite(app)
         sprite.activated.connect(self._activate_app)
         sprite.drag_started.connect(self._on_drag_started)
+        sprite.hovered.connect(self._on_sprite_hovered)
         self._scene.addItem(sprite)
         x, y = self._spawn_position(sprite.size)
         sprite.place(x, y)
@@ -224,6 +263,10 @@ class MainWindow(QMainWindow):
         sprite = self._sprites.get(app_id)
         if sprite is not None and sprite.is_alive:
             self._adapter.activate(sprite.app)
+
+    @Slot(str)
+    def _on_sprite_hovered(self, app_id: str) -> None:
+        self._last_hovered_app = app_id
 
     @Slot(str)
     def _on_drag_started(self, app_id: str) -> None:
@@ -273,6 +316,7 @@ class MainWindow(QMainWindow):
         self._chat.stop()
         self._fight.stop()
         self._care.stop()
+        self._presence.stop()
         self._pool.clear()
         self._adapter.shutdown()
         super().closeEvent(event)

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import random
-import time
 from enum import Enum
 
 from PySide6.QtCore import (
@@ -30,6 +29,7 @@ from procbox import config
 from procbox.core.models import AppInfo
 from procbox.core.motion import Motion, random_velocity, step
 from procbox.ui.bubble import SpeechBubble
+from procbox.ui.effects import FRAME_FPS, Effect, EffectArt
 from procbox.ui.face import Expression, draw_face, pick_expression
 
 BODY = QRectF(config.BODY_X, config.BODY_Y, config.BODY_SIZE, config.BODY_SIZE)
@@ -39,6 +39,10 @@ DEAD_LIMB = QColor("#B8B8B8")
 DEAD_OUTLINE = QColor("#EEEEEE")
 GROAN_LINES = ["呃…", "啊…", "唔…", "好痛…", "咳…"]
 PHYSICS_ROLL_RATE = 0.45
+DRAG_ROPE_LENGTH = 42.0
+DRAG_SPRING = 85.0
+DRAG_DAMPING = 2.2
+DRAG_MAX_SPEED = 1_300.0
 
 
 class LyingPose(Enum):
@@ -51,6 +55,7 @@ class AppSprite(QGraphicsObject):
 
     activated = Signal(str)
     drag_started = Signal(str)
+    hovered = Signal(str)
 
     def __init__(
         self,
@@ -111,9 +116,10 @@ class AppSprite(QGraphicsObject):
         self._dragging = False
         self._drag_pending = False
         self._drag_pending_pos = QPointF()
-        self._drag_offset = QPointF()
-        self._drag_start = QPointF()
-        self._drag_history: list[tuple[float, QPointF]] = []
+        self._drag_anchor = QPointF()
+        self._drag_rest_dir = QPointF(0.0, 1.0)
+        self._drag_vel_x = 0.0
+        self._drag_vel_y = 0.0
         self._physics_active = False
         self._physics_vx = 0.0
         self._physics_vy = 0.0
@@ -126,6 +132,10 @@ class AppSprite(QGraphicsObject):
         self._recovery_timer = 0.0
         self._get_up_timer = 0.0
         self._landing_position: QPointF | None = None
+        self._activity_effect: Effect | None = None
+        self._activity_target: Effect | None = None
+        self._activity_progress = 0.0
+        self._activity_time = 0.0
 
         self._bubble = SpeechBubble(self)
 
@@ -243,6 +253,10 @@ class AppSprite(QGraphicsObject):
         return self._alive and not self._dragging
 
     @property
+    def activity_effect(self) -> Effect | None:
+        return self._activity_effect
+
+    @property
     def is_grudging(self) -> bool:
         return self._grudge_remaining > 0.0
 
@@ -325,6 +339,7 @@ class AppSprite(QGraphicsObject):
         painter.drawPixmap(BODY.topLeft(), pixmap)
         self._draw_face_cached(painter)
         self._draw_wound(painter)
+        self._draw_activity_effect(painter)
         painter.restore()
 
     def place(self, x: float, y: float) -> None:
@@ -343,6 +358,7 @@ class AppSprite(QGraphicsObject):
             return
 
         self._anim_time += dt
+        self._tick_activity_effect(dt)
         if self._knocked_down:
             self._tick_down(dt)
             return
@@ -374,7 +390,14 @@ class AppSprite(QGraphicsObject):
 
         self._tick_face(dt)
 
-        if self._dragging or self._physics_active:
+        if self._dragging:
+            self._tick_drag_rope(dt, width, height)
+            self._impact_timer = max(0.0, self._impact_timer - dt)
+            self._move_phase += dt * 4.0
+            self.update()
+            return
+
+        if self._physics_active:
             self._impact_timer = max(0.0, self._impact_timer - dt)
             self._move_phase += dt * (4.0 + self.physics_speed / 25.0)
             self.update()
@@ -403,6 +426,14 @@ class AppSprite(QGraphicsObject):
             return
 
         if self._hovered:
+            self.update()
+            return
+
+        if (
+            self._activity_effect is not None
+            and self._activity_progress > 0.15
+            and not self._activity_busy()
+        ):
             self.update()
             return
 
@@ -779,6 +810,48 @@ class AppSprite(QGraphicsObject):
     def hide_bubble(self) -> None:
         self._bubble.hide_now()
 
+    def set_activity_effect(self, effect: Effect | None) -> None:
+        if effect is not None and self._activity_busy():
+            effect = None
+        if effect == self._activity_target:
+            return
+        self._activity_target = effect
+        if effect is not None:
+            if self._rest_remaining > 0.0:
+                self._wake_up()
+            self._activity_effect = effect
+            self._activity_progress = 0.0
+            self._activity_time = 0.0
+
+    def _activity_busy(self) -> bool:
+        return (
+            not self._alive
+            or self._knocked_down
+            or self._dragging
+            or self._physics_active
+            or self._fighting
+            or self._chatting
+            or self._spectating
+            or self._helping
+            or self._fleeing
+            or self._chasing
+            or self._caring
+            or self._recovering
+        )
+
+    def _tick_activity_effect(self, dt: float) -> None:
+        if self._activity_busy():
+            self._activity_target = None
+        if self._activity_target is None:
+            if self._activity_effect is not None:
+                self._activity_progress = max(0.0, self._activity_progress - dt * 4.0)
+                if self._activity_progress <= 0.0:
+                    self._activity_effect = None
+                    self._expression_timer = 0.0
+            return
+        self._activity_progress = min(1.0, self._activity_progress + dt * 4.0)
+        self._activity_time += dt
+
     def cancel_fight(self) -> None:
         if not self._alive:
             return
@@ -925,6 +998,7 @@ class AppSprite(QGraphicsObject):
     def hoverEnterEvent(self, event) -> None:
         if self._alive and not self._dragging:
             self._hovered = True
+            self.hovered.emit(self._app.app_id)
             self.setToolTip(self._tooltip())
             scene = self.scene()
             view = scene.views()[0] if scene is not None and scene.views() else None
@@ -967,9 +1041,17 @@ class AppSprite(QGraphicsObject):
         self._rest_remaining = 0.0
         self._dragging = True
         self._hovered = False
-        self._drag_offset = scene_pos - self.pos()
-        self._drag_start = QPointF(scene_pos)
-        self._drag_history = [(time.monotonic(), QPointF(scene_pos))]
+        self._drag_anchor = QPointF(scene_pos)
+        self._drag_vel_x = 0.0
+        self._drag_vel_y = 0.0
+        center = self.center_scene
+        dx = center.x() - scene_pos.x()
+        dy = center.y() - scene_pos.y()
+        length = math.hypot(dx, dy)
+        if length < 1.0:
+            self._drag_rest_dir = QPointF(0.0, 1.0)
+        else:
+            self._drag_rest_dir = QPointF(dx / length, dy / length)
         self._expression = Expression.SURPRISED
         self._expression_timer = 99.0
         self._bubble.hide_now()
@@ -985,51 +1067,65 @@ class AppSprite(QGraphicsObject):
     def drag_to(self, scene_pos: QPointF) -> None:
         if not self._dragging:
             return
-        scene = self.scene()
-        if scene is None:
-            return
-        rect = scene.sceneRect()
-        max_x = max(0.0, rect.width() - self._size)
-        max_y = max(0.0, rect.height() - self._size)
-        x = min(max(scene_pos.x() - self._drag_offset.x(), 0.0), max_x)
-        y = min(max(scene_pos.y() - self._drag_offset.y(), 0.0), max_y)
+        self._drag_anchor = QPointF(scene_pos)
+
+    def _tick_drag_rope(self, dt: float, width: float, height: float) -> None:
+        center = self.center_scene
+        dx = center.x() - self._drag_anchor.x()
+        dy = center.y() - self._drag_anchor.y()
+        distance = math.hypot(dx, dy)
+        if distance < 0.01:
+            ux = self._drag_rest_dir.x()
+            uy = self._drag_rest_dir.y()
+        else:
+            ux = dx / distance
+            uy = dy / distance
+
+        stretch = distance - DRAG_ROPE_LENGTH
+        acceleration = -DRAG_SPRING * stretch
+        vx = self._drag_vel_x + ux * acceleration * dt
+        vy = self._drag_vel_y + uy * acceleration * dt
+
+        damping = math.exp(-DRAG_DAMPING * dt)
+        vx *= damping
+        vy *= damping
+        speed = math.hypot(vx, vy)
+        if speed > DRAG_MAX_SPEED:
+            factor = DRAG_MAX_SPEED / speed
+            vx *= factor
+            vy *= factor
+
+        self._drag_vel_x = vx
+        self._drag_vel_y = vy
+        max_x = max(0.0, width - self._size)
+        max_y = max(0.0, height - self._size)
+        x = min(max(center.x() + vx * dt - BODY.center().x(), 0.0), max_x)
+        y = min(max(center.y() + vy * dt - BODY.center().y(), 0.0), max_y)
+        self._motion = Motion(x, y, vx, vy)
         self.setPos(x, y)
         self.setZValue(2_000_000.0)
-        self._motion = Motion(x, y, 0.0, 0.0)
-
-        now = time.monotonic()
-        self._drag_history.append((now, QPointF(scene_pos)))
-        self._drag_history = [sample for sample in self._drag_history if now - sample[0] <= 0.12]
-        self.update()
 
     def release_drag(self, scene_pos: QPointF) -> None:
         if not self._dragging:
             return
+        self._drag_anchor = QPointF(scene_pos)
         self._dragging = False
         self.setScale(1.0)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._hovered = False
         QToolTip.hideText()
 
-        now = time.monotonic()
-        self._drag_history.append((now, QPointF(scene_pos)))
-        self._drag_history = [sample for sample in self._drag_history if now - sample[0] <= 0.12]
-        vx = 0.0
-        vy = 0.0
-        if len(self._drag_history) >= 2:
-            start_time, start_pos = self._drag_history[0]
-            end_time, end_pos = self._drag_history[-1]
-            elapsed = end_time - start_time
-            if elapsed > 0.008:
-                vx = (end_pos.x() - start_pos.x()) / elapsed
-                vy = (end_pos.y() - start_pos.y()) / elapsed
+        vx = self._drag_vel_x * 1.15
+        vy = self._drag_vel_y * 1.15
         speed = math.hypot(vx, vy)
         if speed > 1_700.0:
-            scale = 1_700.0 / speed
-            vx *= scale
-            vy *= scale
+            factor = 1_700.0 / speed
+            vx *= factor
+            vy *= factor
             speed = 1_700.0
 
+        self._drag_vel_x = 0.0
+        self._drag_vel_y = 0.0
         if speed >= 80.0:
             self.begin_physics(vx, vy, spin=self.roll_angular(vx, vy))
         else:
@@ -1041,6 +1137,8 @@ class AppSprite(QGraphicsObject):
         if self._physics_active or self._recovering:
             self.prepareGeometryChange()
         self._dragging = False
+        self._drag_vel_x = 0.0
+        self._drag_vel_y = 0.0
         self._physics_active = False
         self._physics_vx = 0.0
         self._physics_vy = 0.0
@@ -1063,6 +1161,8 @@ class AppSprite(QGraphicsObject):
         if not self._dragging:
             return
         self._dragging = False
+        self._drag_vel_x = 0.0
+        self._drag_vel_y = 0.0
         self.setScale(1.0)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._hovered = False
@@ -1266,6 +1366,21 @@ class AppSprite(QGraphicsObject):
         self._fall_anim.start()
         self.update()
 
+    def _draw_activity_effect(self, painter: QPainter) -> None:
+        effect = self._activity_effect
+        if effect is None or self._activity_progress <= 0.0 or self._activity_busy():
+            return
+        frame = EffectArt.frame(effect, int(self._activity_time * FRAME_FPS))
+        center = BODY.center()
+        painter.save()
+        painter.setOpacity(self._activity_progress)
+        painter.translate(center)
+        zoom = 0.88 + 0.12 * self._activity_progress
+        painter.scale(zoom, zoom)
+        painter.translate(-center)
+        painter.drawPixmap(0.0, 0.0, frame)
+        painter.restore()
+
     def _face_key(self) -> tuple:
         return (
             self._expression,
@@ -1320,6 +1435,18 @@ class AppSprite(QGraphicsObject):
             self._expression_timer = 99.0
         elif self._fighting or self._helping or self._fleeing or self._chasing:
             self._expression = Expression.ANGRY
+            self._expression_timer = 99.0
+        elif (
+            self._activity_effect is not None
+            and self._activity_progress > 0.05
+            and not self._activity_busy()
+        ):
+            if self._activity_effect is Effect.AUDIO:
+                self._expression = Expression.SHOUT
+            elif self._activity_effect is Effect.NETWORK:
+                self._expression = Expression.HAPPY
+            else:
+                self._expression = Expression.FOCUSED
             self._expression_timer = 99.0
         elif self._grudge_remaining > 0.0:
             self._grudge_remaining = max(0.0, self._grudge_remaining - dt)
@@ -1644,6 +1771,15 @@ class AppSprite(QGraphicsObject):
             self._stroke_path(painter, leg, outline_color, 7.0)
             self._stroke_path(painter, leg, limb_color, 4.4)
 
+        arm_opacity = 1.0
+        if (
+            self._activity_effect is not None
+            and self._activity_progress > 0.0
+            and not self._activity_busy()
+        ):
+            arm_opacity = max(0.0, 1.0 - self._activity_progress)
+        painter.save()
+        painter.setOpacity(arm_opacity)
         for side in (-1, 1):
             shoulder = QPointF(cx + side * 20.0, BODY.top() + 36.0)
             if static:
@@ -1684,6 +1820,7 @@ class AppSprite(QGraphicsObject):
             painter.setPen(QPen(outline_color, 1.5))
             painter.setBrush(limb_color)
             painter.drawEllipse(hand, 3.6, 3.6)
+        painter.restore()
 
     @staticmethod
     def _rotate_point(point: QPointF, pivot: QPointF, angle: float) -> QPointF:

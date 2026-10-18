@@ -12,6 +12,8 @@ class Expression(Enum):
     SURPRISED = "surprised"
     SLEEPY = "sleepy"
     ANGRY = "angry"
+    FOCUSED = "focused"
+    SHOUT = "shout"
     SCREAM = "scream"
     DEAD = "dead"
 
@@ -192,7 +194,34 @@ def draw_face(
         _draw_open_eye(painter, eyes[0], look_x, look_y, ink)
         _draw_open_eye(painter, eyes[1], look_x, look_y, ink)
 
-    if expression is Expression.ANGRY:
+    if expression is Expression.FOCUSED:
+        _stroke(painter, ink, 1.8)
+        painter.drawLine(
+            QPointF(cx - eye_dx - 3.2, eye_y - 5.2),
+            QPointF(cx - eye_dx + 3.0, eye_y - 3.2),
+        )
+        painter.drawLine(
+            QPointF(cx + eye_dx + 3.2, eye_y - 5.2),
+            QPointF(cx + eye_dx - 3.0, eye_y - 3.2),
+        )
+        _draw_smile(painter, mouth, ink)
+    elif expression is Expression.SHOUT:
+        _stroke(painter, ink, 1.8)
+        painter.drawLine(
+            QPointF(cx - eye_dx - 3.4, eye_y - 5.8),
+            QPointF(cx - eye_dx + 3.0, eye_y - 3.6),
+        )
+        painter.drawLine(
+            QPointF(cx + eye_dx + 3.4, eye_y - 5.8),
+            QPointF(cx + eye_dx - 3.0, eye_y - 3.6),
+        )
+        painter.setPen(QPen(ink, 1.1))
+        painter.setBrush(ink)
+        painter.drawEllipse(QPointF(mouth.x(), mouth.y() + 1.0), 5.2, 6.8)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(PAPER)
+        painter.drawEllipse(QPointF(mouth.x() - 1.4, mouth.y() - 1.6), 1.0, 1.2)
+    elif expression is Expression.ANGRY:
         _stroke(painter, ink, 1.8)
         painter.drawLine(
             QPointF(cx - eye_dx - 3.2, eye_y - 6.0),
